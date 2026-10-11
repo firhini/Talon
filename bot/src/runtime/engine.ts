@@ -233,7 +233,9 @@ export class Engine {
   private async addUnit(pos: Position, add: { refPrice: number; stopPrice: number; atr: number }): Promise<void> {
     const mark = this.mark(pos.coin);
     if (!(mark > 0)) return;
-    const d = approveAdd(this.guard, pos, mark, pos.side === "long" ? mark - Math.abs(add.refPrice - add.stopPrice) : mark + Math.abs(add.refPrice - add.stopPrice), this.acct, "pyramid add");
+    // size the add on realised equity only (open pnl of an isolated position is not usable collateral)
+    const realised = this.acct.equity - (grossPnl(pos.side, pos.entryPrice, mark, pos.qty) - pos.fees + pos.funding);
+    const d = approveAdd(this.guard, pos, mark, pos.side === "long" ? mark - Math.abs(add.refPrice - add.stopPrice) : mark + Math.abs(add.refPrice - add.stopPrice), { ...this.acct, equity: realised }, "pyramid add");
     if (!d.ok) { this.log(`add rejected: ${d.reason}`); return; }
     try {
       const fill = await this.exec.addUnit(d.order, mark);

@@ -97,7 +97,10 @@ export class RiskGuard {
   }
 }
 
-/** Pyramiding: approve one more unit for an existing position (same coin and side, same leverage, total margin capped). */
+/**
+ * Pyramiding: approve one more unit for an existing position (same coin and side, same leverage, total margin capped).
+ * Pass acct.equity = REALISED equity (without the open position's unrealised pnl): isolated margin cannot borrow against it.
+ */
 export function approveAdd(guard: RiskGuard, pos: Position, refPrice: number, stopPrice: number, acct: AccountState, reason: string): RiskDecision {
   const spec = guard.spec(pos.coin);
   if (!spec) return { ok: false, reason: `unknown asset ${pos.coin}` };

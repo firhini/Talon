@@ -89,9 +89,9 @@ export function defaultStrategyParams(): StrategyParams {
   };
 }
 
-/** APEX moonshot preset: 15m momentum in the 1h trend, 4h regime filter, pyramiding, chandelier trail. */
+/** APEX moonshot preset: 1h momentum in the 4h trend, 4h efficiency-ratio regime filter, pyramiding, chandelier trail. */
 export function apexParams(): StrategyParams {
-  return { ...defaultStrategyParams(), name: "apex", lookback: 32, exitLookback: 0, stopAtrMult: 2, rMultiple: 0, trailAtrMult: 3, trailAfterR: 0, volumeMult: 0, trendFilter: "ema", trendEmaN: 50, regimeErMin: 0.3, regimeErN: 20, maxUnits: 4, addEveryAtr: 1 };
+  return { ...defaultStrategyParams(), name: "apex", lookback: 24, exitLookback: 0, stopAtrMult: 2, rMultiple: 0, trailAtrMult: 3, trailAfterR: 0, volumeMult: 0, trendFilter: "ema", trendEmaN: 50, regimeErMin: 0.3, regimeErN: 20, maxUnits: 4, addEveryAtr: 1 };
 }
 
 /** The strategy exactly as specified in the original brief (15m breakout reclaim with volume confirmation). */
@@ -142,7 +142,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     leverage,
     maxLeverage,
     sizeFraction: num(env, "SIZE_FRACTION", apex ? 1 : 0.1),
-    riskPerTradePct: num(env, "RISK_PER_TRADE_PCT", apex ? 0.05 : 0.01),
+    riskPerTradePct: num(env, "RISK_PER_TRADE_PCT", apex ? 0.02 : 0.01),
     dynamicLeverage: bool(env, "DYNAMIC_LEVERAGE", apex),
     compound: bool(env, "COMPOUND", apex),
     baseEquity: paperStartEquity,
@@ -156,7 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (leverage < 1) throw new Error("LEVERAGE must be >= 1");
 
   const universe = str(env, "UNIVERSE", DEFAULT_UNIVERSE.join(",")).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  const interval = str(env, "CANDLE_INTERVAL", strategyName === "donchian" ? "1h" : "15m") as Interval;
+  const interval = str(env, "CANDLE_INTERVAL", strategyName === "reclaim" ? "15m" : "1h") as Interval;
   const contextInterval = str(env, "CONTEXT_INTERVAL", interval === "15m" ? "1h" : interval === "1h" ? "4h" : "1d") as Interval;
 
   const cfg: AppConfig = {

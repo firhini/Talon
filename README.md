@@ -83,7 +83,9 @@ Universe BTC, ETH, SOL, BNB, HYPE; `CANDLE_INTERVAL` with one-step-higher `CONTE
 
 * **`donchian`** (default): classic channel breakout trend-following — close beyond the `LOOKBACK`-bar (48 h) channel, 2 ATR stop, 2R take-profit, exit on the opposite `EXIT_LOOKBACK` channel, long and short, no filters. Chosen because it is the configuration that made money in-sample *and* out-of-sample; see `BACKTEST.md` for the grid, the neighbourhood test and the stress test.
 * **`reclaim`** (the brief): breakout level = highest high / lowest low of the previous `LOOKBACK` candles. A candle closes beyond the level (break), a later candle closes back inside (pullback), and the entry fires only when the next candle closes beyond the level again **on volume > `VOLUME_MULT` × the 20-candle average** and within `MAX_CHASE_ATR` ATR of the level. No confirmation → no trade, never chase. Stop = pullback extreme, widened to at least `STOP_ATR_MULT` ATR; take-profit at `R_MULTIPLE` × risk; optional ATR trailing stop.
-Optional 1h EMA trend filter (`TREND_FILTER=ema`): longs only above a rising EMA, shorts only below a falling one.
+* **`apex`** (APEX Moonshot, risk 5/5): 1h breakouts with the 4h trend and a 4h efficiency-ratio regime filter, pyramiding up to 4 units, chandelier trailing stop, 2 % of current equity risked per unit with full compounding, leverage chosen per trade up to the exchange maximum (40× BTC). Backtest +886 % / max DD 52 % / 24 % win rate; Monte-Carlo median ×9.4 with a 17 % chance of a >50 % drawdown. Read `BACKTEST.md` §4 before touching it.
+
+Optional context EMA trend filter (`TREND_FILTER=ema`): longs only above a rising EMA, shorts only below a falling one. Pyramiding (`MAX_UNITS`, `ADD_EVERY_ATR`), compounding (`COMPOUND`) and dynamic leverage (`DYNAMIC_LEVERAGE`) are available to every strategy; presets bundle sensible combinations and can be activated from the dashboard's Strategy Lab.
 
 Startup: a market scan (trend, ATR %, volume activity, distance to the breakout levels, current setup state) is computed for all five coins, stored and shown on the dashboard before any trade, and refreshed every candle.
 
@@ -91,7 +93,7 @@ Startup: a market scan (trend, ATR %, volume activity, distance to the breakout 
 
 Every order intent is turned into an `ApprovedOrder` by `RiskGuard.approve()` or rejected with a reason. The executors accept only `ApprovedOrder`s. It enforces:
 
-* leverage = min(`LEVERAGE`, `MAX_LEVERAGE`, exchange max, **hard ceiling 10× in code**)
+* leverage = min(`LEVERAGE`, `MAX_LEVERAGE`, exchange max, hard ceiling 50× in code); with `DYNAMIC_LEVERAGE` the smallest leverage that keeps the structural stop inside the hard ROE stop is used, so a position is always stopped before it can be liquidated
 * margin per trade = `SIZE_FRACTION` × equity (starting equity unless `COMPOUND=true`); never all-in. Default 10 % (the brief's 20 % trips the kill switch in backtests). `RISK_PER_TRADE_PCT` additionally caps the size so a stop-out costs at most 1 % of equity (volatility-normalised: wider stop → smaller position)
 * a stop must exist on the correct side; it is clamped to the **−40 % ROE hard stop** (`HARD_STOP_ROE`) and placed as a real exchange order in live mode
 * Hyperliquid tick/lot rounding (5 significant figures, `szDecimals`) and the $10 minimum order; trades that round to nothing are skipped

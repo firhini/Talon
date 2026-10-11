@@ -164,7 +164,8 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
           else {
             if (act?.newStop !== undefined) pos.stopPrice = guard.finalStop(pos.coin, pos.side, pos.entryPrice, act.newStop, pos.leverage);
             if (act?.addUnit && !pendingAdd && !acct.halted) {
-              const d = approveAdd(guard, pos, act.addUnit.refPrice, act.addUnit.stopPrice, { ...acct, equity: cash + unrealizedOf(pos, k.c) }, "pyramid add");
+              // adds are funded from realised collateral only (isolated margin cannot borrow against open pnl)
+              const d = approveAdd(guard, pos, act.addUnit.refPrice, act.addUnit.stopPrice, { ...acct, equity: cash }, "pyramid add");
               if (d.ok) pendingAdd = { order: d.order, stop: act.addUnit.stopPrice };
             }
           }

@@ -61,3 +61,31 @@ Robustness checks:
 ## 3. Honest expectation
 
 Expectancy of 0.08 R with a 39 % hit rate is a thin, real edge that depends on trends existing. A reasonable expectation is low-double-digit percent per year with drawdowns of 15–25 %, and quarters that lose money. Nothing here guarantees profit. Run paper mode first, compare the paper trade log with the backtest over a few weeks, and only then fund a small live account below `MAX_ACCOUNT_EQUITY`.
+
+## 4. APEX Moonshot (high-leverage preset, risk level 5/5)
+
+`npm run backtest -- --preset apex` — 1h channel breakout (24 bars) only with the 4h EMA-50 trend and only when the 4h Kaufman efficiency ratio ≥ 0.3; 2 ATR stop; 3 ATR chandelier trailing stop, no fixed target; pyramiding one unit per ATR of profit up to 4 units; each unit risks 2 % of **current** equity (compounding); leverage per trade = smallest value that keeps the stop inside the −40 % ROE hard stop, capped at the exchange maximum (mostly 10× on HYPE/BNB, 20–25× on BTC/ETH/SOL). Kill switch 60 % drawdown, daily loss limit 25 %. Pyramid adds are funded from realised collateral only (isolated margin cannot borrow against open pnl).
+
+| | with fees | no fees |
+|---|---:|---:|
+| positions (units) | 171 (333) | 170 |
+| win rate | 24.0 % | 25.9 % |
+| profit factor | 1.81 | 2.24 |
+| max drawdown | 52.4 % | 48.3 % |
+| total return (13.3 mo) | **+886 %** | +1766 % |
+| fees / funding | $1 300 / −$186 | – |
+| long / short | 86 / 85 | |
+| exits | trailing stop 103 · stop 67 | |
+
+Monte-Carlo (2000 bootstrap resamples of the per-trade returns, same number of trades): final multiple 5th pct ×1.4 · 25th ×4.2 · **median ×9.4** · 75th ×22 · 95th ×72; P(end below start) 2 %; P(drawdown > 50 %) 17 %; P(ruin, drawdown > 90 %) 0 %; median max drawdown 39 %.
+
+Checks:
+
+* **Fresh out-of-sample** (`--from 2026-05-01`, starting again at $1 000): +242 %, PF 2.24, max DD 32 %, MC median ×3.3 for the 5-month window.
+* **Sep–Dec 2025 only**: +114 %, max DD 44 %.
+* **Stress** (slippage 10 bps, taker 6 bps): +392 %, PF 1.49, max DD 56 %, P(DD > 50 %) 35 %. Costs took 60 % of gross profit even at base assumptions: this preset lives or dies on execution quality.
+* **Risk 3 % per unit instead of 2 %**: kill switch at 60 % drawdown fires in January 2026. 2 % is the ceiling for this ruleset.
+* **Grid** (lookback 24/48/96, stop 2/3 ATR, trail 3/4 ATR, ER 0/0.3/0.45, units 1/2/4, risk 2/3.5/5 %, on 15m and 1h): every 1h variant had a profit factor above 1.1; the 15m variants trade 3× as often, pay 3× the fees and show ruin probabilities of 10–60 % at risk ≥ 3.5 %. The 1h / ER 0.3 / 4 units / 2 % configuration is near the top on median Monte-Carlo outcome with the lowest tail risk of the family.
+* **Where the money came from**: HYPE +$3 168, SOL +$3 372, ETH +$1 407, BNB +$2 110, **BTC −$1 192**. Months: 9 positive / 5 negative; the worst month lost 15 % of equity at the time.
+
+**What this means.** The backtest says roughly "×9 per year, median", but it is one 13-month sample from a period with several violent trends, and three quarters of positions lose. The honest reading is: large positive expectancy with a 40–60 % drawdown somewhere along the way, a real chance of a losing year, and extreme sensitivity to fees and slippage. "€10 → €10 000 in a year" (×1000) is not in the distribution: the 95th percentile is ×72. Run it in paper first, then with money you can lose entirely.
