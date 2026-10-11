@@ -57,34 +57,44 @@ function str(env: NodeJS.ProcessEnv, key: string, def: string): string {
   return v === undefined || v === "" ? def : v;
 }
 
+/**
+ * Defaults = the configuration that survived the 13-month in-sample / out-of-sample backtest
+ * (see BACKTEST.md): 1h Donchian trend-following, 2 ATR stop, 2R target, 24-bar channel exit.
+ * The spec's 15m volume-confirmed reclaim is available with STRATEGY=reclaim (its numbers are in BACKTEST.md too).
+ */
 export function defaultStrategyParams(): StrategyParams {
   return {
-    name: "reclaim",
+    name: "donchian",
     lookback: 48,
-    volumeMult: 1.5,
+    volumeMult: 0,
     volumeAvgN: 20,
     maxSetupBars: 12,
     maxChaseAtr: 1.0,
-    stopAtrMult: 1.0,
-    rMultiple: 3,
+    stopAtrMult: 2.0,
+    rMultiple: 2,
     trailAtrMult: 0,
     trailAfterR: 1,
     timeStopBars: 0,
     trendFilter: "none",
     trendEmaN: 50,
-    exitLookback: 20,
+    exitLookback: 24,
     atrN: 14,
     allowLong: true,
     allowShort: true,
   };
 }
 
+/** The strategy exactly as specified in the original brief (15m breakout reclaim with volume confirmation). */
+export function specReclaimParams(): StrategyParams {
+  return { ...defaultStrategyParams(), name: "reclaim", lookback: 48, volumeMult: 1.5, stopAtrMult: 1.0, rMultiple: 3, exitLookback: 0 };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const modeRaw = str(env, "MODE", "paper").toLowerCase();
   if (!["backtest", "paper", "live"].includes(modeRaw)) throw new Error(`MODE must be backtest|paper|live, got "${modeRaw}"`);
   const mode = modeRaw as Mode;
-  const d = defaultStrategyParams();
-  const strategyName = str(env, "STRATEGY", d.name);
+  const strategyName = str(env, "STRATEGY", defaultStrategyParams().name);
+  const d = strategyName === "reclaim" ? specReclaimParams() : defaultStrategyParams();
   if (strategyName !== "reclaim" && strategyName !== "donchian") throw new Error(`STRATEGY must be reclaim|donchian`);
   const trendFilter = str(env, "TREND_FILTER", d.trendFilter);
   if (trendFilter !== "none" && trendFilter !== "ema") throw new Error(`TREND_FILTER must be none|ema`);
@@ -116,12 +126,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const risk: RiskConfig = {
     leverage,
     maxLeverage,
-    sizeFraction: num(env, "SIZE_FRACTION", 0.2),
+    sizeFraction: num(env, "SIZE_FRACTION", 0.1),
+    riskPerTradePct: num(env, "RISK_PER_TRADE_PCT", 0.01),
     compound: bool(env, "COMPOUND", false),
     baseEquity: paperStartEquity,
     hardStopRoe: num(env, "HARD_STOP_ROE", 0.4),
     dailyLossLimitPct: num(env, "DAILY_LOSS_LIMIT_PCT", 0.05),
-    maxDrawdownPct: num(env, "MAX_DRAWDOWN_PCT", 0.15),
+    maxDrawdownPct: num(env, "MAX_DRAWDOWN_PCT", 0.25),
     minNotionalUsd: num(env, "MIN_NOTIONAL_USD", 10),
     maxAccountEquity: maxAccountEquityRaw ? Number(maxAccountEquityRaw) : null,
   };
@@ -129,8 +140,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (leverage < 1) throw new Error("LEVERAGE must be >= 1");
 
   const universe = str(env, "UNIVERSE", DEFAULT_UNIVERSE.join(",")).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  const interval = str(env, "CANDLE_INTERVAL", "15m") as Interval;
-  const contextInterval = str(env, "CONTEXT_INTERVAL", "1h") as Interval;
+  const interval = str(env, "CANDLE_INTERVAL", strategyName === "reclaim" ? "15m" : "1h") as Interval;
+  const contextInterval = str(env, "CONTEXT_INTERVAL", interval === "15m" ? "1h" : interval === "1h" ? "4h" : "1d") as Interval;
 
   const cfg: AppConfig = {
     mode,

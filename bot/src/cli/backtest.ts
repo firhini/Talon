@@ -64,6 +64,18 @@ if (flag("sweep")) {
       }
     }
   }
+  const customGrid = arg("grid");
+  if (customGrid) {
+    // e.g. --grid "lookback=36,48,60;stopAtrMult=1.5,2;rMultiple=2,3" with --strategy/--interval as the base
+    grid.length = 0;
+    const dims = customGrid.split(";").map((d) => { const [k, vs] = d.split("="); return { k: k.trim(), vs: vs.split(",").map((v) => (v === "none" || v === "ema" ? v : Number(v))) }; });
+    const base: Partial<StrategyParams> = { name: (arg("strategy", cfg.strategy.name) as StrategyParams["name"]) };
+    const rec = (i: number, acc: Record<string, unknown>) => {
+      if (i === dims.length) { grid.push({ interval, params: { ...base, ...acc } as Partial<StrategyParams> }); return; }
+      for (const v of dims[i].vs) rec(i + 1, { ...acc, [dims[i].k]: v });
+    };
+    rec(0, {});
+  }
   const only = arg("only");
   const validateFrom = arg("validate-from") ? parseDate(arg("validate-from"), 0) : null;
   const rows: { label: string; r: BacktestResult; is: Metrics; oos: Metrics | null }[] = [];
@@ -98,6 +110,19 @@ if (flag("sweep")) {
   const r = run(cfg.strategy, interval, label, { killSwitch: (arg("kill", "halt") as "halt" | "off") });
   console.log(formatReport(r));
   if (flag("trades")) for (const t of r.trades) console.log(`${new Date(t.entryTime).toISOString().slice(0, 16)} ${t.coin.padEnd(4)} ${t.side.padEnd(5)} ${t.leverage}x in ${t.entryPrice.toFixed(2)} out ${t.exitPrice.toFixed(2)} roe ${(t.roe * 100).toFixed(1).padStart(6)}% pnl ${t.pnl.toFixed(2).padStart(8)} fees ${t.fees.toFixed(2)} fund ${t.funding.toFixed(2)} | ${t.reasonExit}`);
+  if (flag("breakdown")) {
+    const agg = (key: (t: Trade) => string) => {
+      const m = new Map<string, { n: number; pnl: number; wins: number }>();
+      for (const t of r.trades) { const k = key(t); const e = m.get(k) ?? { n: 0, pnl: 0, wins: 0 }; e.n++; e.pnl += t.pnl; if (t.pnl > 0) e.wins++; m.set(k, e); }
+      return [...m.entries()].sort();
+    };
+    console.log("\nby coin:");
+    for (const [k, e] of agg((t) => t.coin)) console.log(`  ${k.padEnd(5)} n=${String(e.n).padStart(4)} win=${((e.wins / e.n) * 100).toFixed(0).padStart(3)}% pnl=${e.pnl.toFixed(2).padStart(9)}`);
+    console.log("by month:");
+    for (const [k, e] of agg((t) => new Date(t.entryTime).toISOString().slice(0, 7))) console.log(`  ${k} n=${String(e.n).padStart(4)} win=${((e.wins / e.n) * 100).toFixed(0).padStart(3)}% pnl=${e.pnl.toFixed(2).padStart(9)}`);
+    console.log("by side:");
+    for (const [k, e] of agg((t) => t.side)) console.log(`  ${k.padEnd(5)} n=${String(e.n).padStart(4)} win=${((e.wins / e.n) * 100).toFixed(0).padStart(3)}% pnl=${e.pnl.toFixed(2).padStart(9)}`);
+  }
   if (flag("save") || !flag("nosave")) {
     const id = saveBacktest(db, label, { ...r.params, interval, contextInterval: CONTEXT_OF[interval], risk: r.risk, fees: r.fees, startEquity, coins },
       { ...r.metrics, noFees: r.metricsNoFees, from: r.from, to: r.to, haltedAt: r.haltedAt, haltReason: r.haltReason, dailyHalts: r.dailyHalts }, r.equityCurve, r.trades);

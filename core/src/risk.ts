@@ -64,7 +64,12 @@ export class RiskGuard {
     const sizingEquity = this.cfg.compound ? acct.equity : Math.min(this.cfg.baseEquity, acct.equity);
     let margin = sizingEquity * this.cfg.sizeFraction;
     margin = Math.min(margin, acct.equity * 0.95);
-    const notionalWanted = margin * leverage;
+    let notionalWanted = margin * leverage;
+    if (this.cfg.riskPerTradePct > 0) {
+      // volatility-normalised cap: lose at most riskPerTradePct of equity if the structural stop is hit
+      const stopFrac = Math.abs(intent.refPrice - intent.stopPrice) / intent.refPrice;
+      if (stopFrac > 0) notionalWanted = Math.min(notionalWanted, (sizingEquity * this.cfg.riskPerTradePct) / stopFrac);
+    }
     const qty = roundSize(notionalWanted / intent.refPrice, spec.szDecimals);
     const notional = qty * intent.refPrice;
     if (qty <= 0 || notional < this.cfg.minNotionalUsd)

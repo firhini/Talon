@@ -8,7 +8,7 @@ const specs = new Map<string, AssetSpec>([
   ["HYPE", { coin: "HYPE", assetIndex: 4, szDecimals: 2, maxLeverage: 10 }],
   ["ATOM", { coin: "ATOM", assetIndex: 9, szDecimals: 2, maxLeverage: 3 }],
 ]);
-const cfg: RiskConfig = { leverage: 5, maxLeverage: 5, sizeFraction: 0.2, compound: false, baseEquity: 1000, hardStopRoe: 0.4, dailyLossLimitPct: 0.05, maxDrawdownPct: 0.15, minNotionalUsd: 10, maxAccountEquity: null };
+const cfg: RiskConfig = { leverage: 5, maxLeverage: 5, sizeFraction: 0.2, riskPerTradePct: 0, compound: false, baseEquity: 1000, hardStopRoe: 0.4, dailyLossLimitPct: 0.05, maxDrawdownPct: 0.15, minNotionalUsd: 10, maxAccountEquity: null };
 const acct = (o: Partial<AccountState> = {}): AccountState => ({ equity: 1000, dayStartEquity: 1000, peakEquity: 1000, dayPnl: 0, position: null, halted: false, haltReason: null, ...o });
 const intent = (o: Partial<OrderIntent> = {}): OrderIntent => ({ coin: "BTC", side: "long", refPrice: 80_000, stopPrice: 79_000, tpPrice: 83_000, leverage: 5, reason: "t", ...o });
 
@@ -74,6 +74,14 @@ describe("RiskGuard", () => {
     expect(on.ok && on.order.margin).toBeCloseTo(400, 0);
     const shrunk = g.approve(intent(), acct({ equity: 500, peakEquity: 500, dayStartEquity: 500 }));
     expect(shrunk.ok && shrunk.order.margin).toBeCloseTo(100, 0); // min(base, equity) * 20%
+  });
+  it("risk-per-trade cap shrinks size for wide stops and never enlarges it", () => {
+    const rg = new RiskGuard({ ...cfg, riskPerTradePct: 0.01 }, specs);
+    const wide = rg.approve(intent({ stopPrice: 76_000 }), acct()); // 5% stop → notional = 1000*0.01/0.05 = 200
+    expect(wide.ok && wide.order.notional).toBeCloseTo(200, 0);
+    const tight = rg.approve(intent({ stopPrice: 79_800 }), acct()); // 0.25% stop → cap 4000 > 1000 → stays 1000
+    expect(tight.ok && tight.order.notional).toBeLessThanOrEqual(1000.01);
+    expect(tight.ok && tight.order.notional).toBeGreaterThan(990);
   });
   it("live equity cap", () => {
     const capped = new RiskGuard({ ...cfg, maxAccountEquity: 500 }, specs);

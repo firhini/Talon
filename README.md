@@ -10,7 +10,7 @@ web/    @talon/web   dashboard (equity curve, position, scan table, trade log, b
 
 Modes (`MODE` env): `backtest` | `paper` (default) | `live`. The same strategy and RiskGuard code runs in all three; only the executor differs.
 
-> **Reality check.** No strategy is guaranteed to make money. The backtests in `BACKTEST.md` are honest: they include taker fees, slippage and real funding history, and they are split into an in-sample and an out-of-sample period. Read them before you risk anything. Start in paper mode.
+> **Reality check.** No strategy is guaranteed to make money. The backtests in [`BACKTEST.md`](BACKTEST.md) are honest: they include taker fees, slippage and real funding history and are split into in-sample and out-of-sample periods. The brief's 15m reclaim strategy **loses after fees** (−3.5 % over 13 months); the default therefore is a 1h Donchian trend-following variant that was profitable in both periods (+31.7 %, max drawdown 17.8 %, profit factor 1.18) — a thin edge that needs trends. Read the report before you risk anything. Start in paper mode.
 
 ---
 
@@ -79,11 +79,10 @@ API wallets expire; when yours does, orders fail with a signature error — gene
 
 ## 3. Strategy
 
-Universe BTC, ETH, SOL, BNB, HYPE; 15m candles with 1h context (`CANDLE_INTERVAL` / `CONTEXT_INTERVAL`). One position at a time across the universe (when several coins signal on the same candle the strongest volume confirmation wins). Two pure strategy variants share the same interface (`core/src/strategy.ts`):
+Universe BTC, ETH, SOL, BNB, HYPE; `CANDLE_INTERVAL` with one-step-higher `CONTEXT_INTERVAL` (1h/4h for the default, 15m/1h for the reclaim preset). One position at a time across the universe (when several coins signal on the same candle the strongest volume confirmation wins). Two pure strategy variants share the same interface (`core/src/strategy.ts`); `STRATEGY=` selects the preset and every parameter can be overridden in `.env`:
 
-* **`reclaim`** (the spec): breakout level = highest high / lowest low of the previous `LOOKBACK` candles. A candle closes beyond the level (break), a later candle closes back inside (pullback), and the entry fires only when the next candle closes beyond the level again **on volume > `VOLUME_MULT` × the 20-candle average** and within `MAX_CHASE_ATR` ATR of the level. No confirmation → no trade, never chase. Stop = pullback extreme, widened to at least `STOP_ATR_MULT` ATR; take-profit at `R_MULTIPLE` × risk; optional ATR trailing stop.
-* **`donchian`**: classic channel breakout trend-following (close beyond the `LOOKBACK` channel, ATR stop, exit on the opposite `EXIT_LOOKBACK` channel or trailing stop). Same filters, same risk layer.
-
+* **`donchian`** (default): classic channel breakout trend-following — close beyond the `LOOKBACK`-bar (48 h) channel, 2 ATR stop, 2R take-profit, exit on the opposite `EXIT_LOOKBACK` channel, long and short, no filters. Chosen because it is the configuration that made money in-sample *and* out-of-sample; see `BACKTEST.md` for the grid, the neighbourhood test and the stress test.
+* **`reclaim`** (the brief): breakout level = highest high / lowest low of the previous `LOOKBACK` candles. A candle closes beyond the level (break), a later candle closes back inside (pullback), and the entry fires only when the next candle closes beyond the level again **on volume > `VOLUME_MULT` × the 20-candle average** and within `MAX_CHASE_ATR` ATR of the level. No confirmation → no trade, never chase. Stop = pullback extreme, widened to at least `STOP_ATR_MULT` ATR; take-profit at `R_MULTIPLE` × risk; optional ATR trailing stop.
 Optional 1h EMA trend filter (`TREND_FILTER=ema`): longs only above a rising EMA, shorts only below a falling one.
 
 Startup: a market scan (trend, ATR %, volume activity, distance to the breakout levels, current setup state) is computed for all five coins, stored and shown on the dashboard before any trade, and refreshed every candle.
@@ -93,7 +92,7 @@ Startup: a market scan (trend, ATR %, volume activity, distance to the breakout 
 Every order intent is turned into an `ApprovedOrder` by `RiskGuard.approve()` or rejected with a reason. The executors accept only `ApprovedOrder`s. It enforces:
 
 * leverage = min(`LEVERAGE`, `MAX_LEVERAGE`, exchange max, **hard ceiling 10× in code**)
-* margin per trade = `SIZE_FRACTION` × equity (× starting equity unless `COMPOUND=true`); never all-in
+* margin per trade = `SIZE_FRACTION` × equity (starting equity unless `COMPOUND=true`); never all-in. Default 10 % (the brief's 20 % trips the kill switch in backtests). `RISK_PER_TRADE_PCT` additionally caps the size so a stop-out costs at most 1 % of equity (volatility-normalised: wider stop → smaller position)
 * a stop must exist on the correct side; it is clamped to the **−40 % ROE hard stop** (`HARD_STOP_ROE`) and placed as a real exchange order in live mode
 * Hyperliquid tick/lot rounding (5 significant figures, `szDecimals`) and the $10 minimum order; trades that round to nothing are skipped
 * daily-loss limit and max-drawdown **kill switch**: flatten, cancel, halt until manual reset

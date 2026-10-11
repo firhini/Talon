@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { defaultStrategyParams } from "../src/config.js";
+import { specReclaimParams } from "../src/config.js";
 import { contextTrend, contextUpTo, evaluateEntry, manage, requiredCandles, type StrategyContext } from "../src/strategy.js";
 import type { Candle, Position } from "../src/types.js";
 import { baseCandles, candle } from "./helpers.js";
 
-const P = { ...defaultStrategyParams(), lookback: 20, volumeAvgN: 20, maxSetupBars: 6, atrN: 14 };
+const P = { ...specReclaimParams(), lookback: 20, volumeAvgN: 20, maxSetupBars: 6, atrN: 14 };
 const ctxOf = (candles: Candle[], params = P, context: Candle[] = []): StrategyContext => ({ coin: "TEST", candles, context, params });
 
 /** base, then breakout close above 100.5 (level = highest high of base), pullback close below, reclaim close above on volume. */
@@ -95,7 +95,7 @@ describe("reclaim strategy", () => {
 });
 
 describe("donchian strategy", () => {
-  const D = { ...P, name: "donchian" as const, volumeMult: 0, stopAtrMult: 2 };
+  const D = { ...P, name: "donchian" as const, volumeMult: 0, stopAtrMult: 2, exitLookback: 20 };
   it("enters on channel breakout close with ATR stop", () => {
     const c = baseCandles(requiredCandles(D) + 10);
     const last = c[c.length - 1];

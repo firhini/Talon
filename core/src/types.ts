@@ -144,6 +144,8 @@ export interface RiskConfig {
   /** hard ceiling, never above HARD_MAX_LEVERAGE */
   maxLeverage: number;
   sizeFraction: number;
+  /** optional cap: risk at most this fraction of equity between entry and stop (0 = off); never increases size */
+  riskPerTradePct: number;
   compound: boolean;
   /** base equity used for sizing when compounding is off */
   baseEquity: number;

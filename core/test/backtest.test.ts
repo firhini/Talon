@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { runBacktest } from "../src/backtest.js";
-import { defaultStrategyParams } from "../src/config.js";
+import { specReclaimParams } from "../src/config.js";
 import { requiredCandles } from "../src/strategy.js";
 import type { AssetSpec, Candle, RiskConfig } from "../src/types.js";
 import { baseCandles, candle } from "./helpers.js";
 
-const P = { ...defaultStrategyParams(), lookback: 20, volumeAvgN: 20, maxSetupBars: 6, atrN: 14, rMultiple: 2 };
+const P = { ...specReclaimParams(), lookback: 20, volumeAvgN: 20, maxSetupBars: 6, atrN: 14, rMultiple: 2 };
 const specs = new Map<string, AssetSpec>([["TEST", { coin: "TEST", assetIndex: 0, szDecimals: 2, maxLeverage: 10 }]]);
-const risk: RiskConfig = { leverage: 5, maxLeverage: 5, sizeFraction: 0.2, compound: false, baseEquity: 1000, hardStopRoe: 0.4, dailyLossLimitPct: 0.5, maxDrawdownPct: 0.5, minNotionalUsd: 10, maxAccountEquity: null };
+const risk: RiskConfig = { leverage: 5, maxLeverage: 5, sizeFraction: 0.2, riskPerTradePct: 0, compound: false, baseEquity: 1000, hardStopRoe: 0.4, dailyLossLimitPct: 0.5, maxDrawdownPct: 0.5, minNotionalUsd: 10, maxAccountEquity: null };
 const fees = { takerFeeBps: 4.5, makerFeeBps: 1.5, slippageBps: 3, defaultHourlyFunding: 0.0000125 };
 
 function series(outcome: "tp" | "stop"): Candle[] {
