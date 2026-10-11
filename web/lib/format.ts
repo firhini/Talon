@@ -87,3 +87,36 @@ export function pnlClass(x: number | null | undefined): string {
   if (x === null || x === undefined || !Number.isFinite(x) || x === 0) return "text-zinc-300";
   return x > 0 ? "text-emerald-400" : "text-rose-400";
 }
+
+/** Compact magnitude: 843M / 12.9K / 1.23 (USD when `usd`). */
+export function fmtCompact(x: number | null | undefined, usd = false): string {
+  if (x === null || x === undefined || !Number.isFinite(x)) return "—";
+  const a = Math.abs(x), s = x < 0 ? "-" : "", p = usd ? "$" : "";
+  if (a >= 1e9) return `${s}${p}${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${s}${p}${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
+  if (a >= 1e4) return `${s}${p}${(a / 1e3).toFixed(a >= 1e5 ? 0 : 1)}K`;
+  return `${s}${p}${fmtNum(a, a >= 100 ? 0 : 2)}`;
+}
+
+/** Equity multiple, e.g. ×3.1 / ×0.42 / ×120 */
+export function fmtMult(x: number | null | undefined): string {
+  if (x === null || x === undefined || !Number.isFinite(x)) return "—";
+  return "×" + (x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2));
+}
+
+/** 1h 23m / 2d 4h for uptimes */
+export function fmtUptime(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return "—";
+  const s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}

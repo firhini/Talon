@@ -7,7 +7,9 @@ interface Props {
   series: Series[];
   height?: number;
   /** serializable so server components can pass it */
-  yFormat?: "usd" | "int";
+  yFormat?: "usd" | "int" | "pct";
+  /** area under series[0]: to the bottom of the plot (default) or to the baseline (drawdown style) */
+  fillFrom?: "bottom" | "baseline";
   /** horizontal reference line (e.g. start equity) */
   baseline?: number;
   /** vertical marker (e.g. kill switch time) */
@@ -47,8 +49,8 @@ function timeLabel(span: number): (t: number) => string {
   return (t) => fmtTime(t).slice(0, 10);
 }
 
-export default function LineChart({ series, height = 260, yFormat = "int", baseline, markerT, markerLabel, emptyText = "No data yet" }: Props) {
-  const fmtY = yFormat === "usd" ? (v: number) => fmtUsd(v, 0) : (v: number) => v.toFixed(0);
+export default function LineChart({ series, height = 260, yFormat = "int", baseline, markerT, markerLabel, emptyText = "No data yet", fillFrom = "bottom" }: Props) {
+  const fmtY = yFormat === "usd" ? (v: number) => fmtUsd(v, 0) : yFormat === "pct" ? (v: number) => `${(v * 100).toFixed(Math.abs(v) < 0.1 ? 1 : 0)}%` : (v: number) => v.toFixed(0);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800); // same initial value on server and client -> no hydration mismatch
   const [hover, setHover] = useState<{ x: number; t: number; vals: { name: string; color: string; v: number }[] } | null>(null);
@@ -73,14 +75,15 @@ export default function LineChart({ series, height = 260, yFormat = "int", basel
     const x = (t: number) => PAD.l + ((t - tMin) / (tMax - tMin)) * iw;
     const y = (v: number) => PAD.t + (1 - (v - vMin) / (vMax - vMin)) * ih;
     const paths = series.map((s) => s.points.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(""));
+    const floor = fillFrom === "baseline" && baseline !== undefined ? y(baseline) : PAD.t + ih;
     const area = series[0]?.points.length
-      ? `${paths[0]}L${x(series[0].points[series[0].points.length - 1].t).toFixed(1)},${(PAD.t + ih).toFixed(1)}L${x(series[0].points[0].t).toFixed(1)},${(PAD.t + ih).toFixed(1)}Z`
+      ? `${paths[0]}L${x(series[0].points[series[0].points.length - 1].t).toFixed(1)},${floor.toFixed(1)}L${x(series[0].points[0].t).toFixed(1)},${floor.toFixed(1)}Z`
       : "";
     const yt = niceTicks(vMin, vMax, 4);
     const xt = timeTicks(tMin, tMax, Math.max(2, Math.min(6, Math.floor(iw / 140))));
     const xLabel = timeLabel(tMax - tMin);
     return { tMin, tMax, vMin, vMax, x, y, paths, area, yt, xt, xLabel, iw, ih };
-  }, [all, series, width, height, baseline]);
+  }, [all, series, width, height, baseline, fillFrom]);
 
   function onMove(e: React.MouseEvent<SVGSVGElement>) {
     if (!model) return;
@@ -120,8 +123,8 @@ export default function LineChart({ series, height = 260, yFormat = "int", basel
           <>
             <defs>
               <linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0" stopColor={series[0].color} stopOpacity="0.22" />
-                <stop offset="1" stopColor={series[0].color} stopOpacity="0" />
+                <stop offset="0" stopColor={series[0].color} stopOpacity={fillFrom === "baseline" ? "0.05" : "0.22"} />
+                <stop offset="1" stopColor={series[0].color} stopOpacity={fillFrom === "baseline" ? "0.3" : "0"} />
               </linearGradient>
             </defs>
             {model.yt.map((v) => (

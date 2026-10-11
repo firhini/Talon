@@ -35,8 +35,8 @@ export default function Mascot() {
     });
   });
   return (
-    <div className="pointer-events-auto fixed right-4 bottom-4 z-40 opacity-80 transition-opacity hover:opacity-100" title="TALON" aria-hidden="true">
-      <svg width={96} height={96} viewBox="0 0 20 20" shapeRendering="crispEdges" role="img">
+    <div className="pointer-events-auto fixed right-3 bottom-12 z-40 opacity-70 transition-opacity hover:opacity-100" title="TALON" aria-hidden="true">
+      <svg width={64} height={64} viewBox="0 0 20 20" shapeRendering="crispEdges" role="img">
         <title>TALON</title>
         {rects}
       </svg>
