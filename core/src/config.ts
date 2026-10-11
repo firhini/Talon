@@ -10,7 +10,8 @@ export function resolveDbPath(p: string): string {
 }
 
 /** Hard ceiling enforced in code regardless of env. */
-export const HARD_MAX_LEVERAGE = 10;
+/** Hard ceiling enforced in code regardless of env (Hyperliquid max is 40× on BTC). */
+export const HARD_MAX_LEVERAGE = 50;
 export const DEFAULT_UNIVERSE = ["BTC", "ETH", "SOL", "BNB", "HYPE"];
 
 export interface FeeConfig {
@@ -81,7 +82,16 @@ export function defaultStrategyParams(): StrategyParams {
     atrN: 14,
     allowLong: true,
     allowShort: true,
+    maxUnits: 1,
+    addEveryAtr: 1,
+    regimeErMin: 0,
+    regimeErN: 20,
   };
+}
+
+/** APEX moonshot preset: 15m momentum in the 1h trend, 4h regime filter, pyramiding, chandelier trail. */
+export function apexParams(): StrategyParams {
+  return { ...defaultStrategyParams(), name: "apex", lookback: 32, exitLookback: 0, stopAtrMult: 2, rMultiple: 0, trailAtrMult: 3, trailAfterR: 0, volumeMult: 0, trendFilter: "ema", trendEmaN: 50, regimeErMin: 0.3, regimeErN: 20, maxUnits: 4, addEveryAtr: 1 };
 }
 
 /** The strategy exactly as specified in the original brief (15m breakout reclaim with volume confirmation). */
@@ -94,8 +104,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (!["backtest", "paper", "live"].includes(modeRaw)) throw new Error(`MODE must be backtest|paper|live, got "${modeRaw}"`);
   const mode = modeRaw as Mode;
   const strategyName = str(env, "STRATEGY", defaultStrategyParams().name);
-  const d = strategyName === "reclaim" ? specReclaimParams() : defaultStrategyParams();
-  if (strategyName !== "reclaim" && strategyName !== "donchian") throw new Error(`STRATEGY must be reclaim|donchian`);
+  const d = strategyName === "reclaim" ? specReclaimParams() : strategyName === "apex" ? apexParams() : defaultStrategyParams();
+  if (strategyName !== "reclaim" && strategyName !== "donchian" && strategyName !== "apex") throw new Error(`STRATEGY must be reclaim|donchian|apex`);
   const trendFilter = str(env, "TREND_FILTER", d.trendFilter);
   if (trendFilter !== "none" && trendFilter !== "ema") throw new Error(`TREND_FILTER must be none|ema`);
 
@@ -117,22 +127,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     atrN: num(env, "ATR_N", d.atrN),
     allowLong: bool(env, "ALLOW_LONG", true),
     allowShort: bool(env, "ALLOW_SHORT", true),
+    maxUnits: Math.max(1, Math.floor(num(env, "MAX_UNITS", d.maxUnits))),
+    addEveryAtr: num(env, "ADD_EVERY_ATR", d.addEveryAtr),
+    regimeErMin: num(env, "REGIME_ER_MIN", d.regimeErMin),
+    regimeErN: num(env, "REGIME_ER_N", d.regimeErN),
   };
 
-  const maxLeverage = Math.min(num(env, "MAX_LEVERAGE", 5), HARD_MAX_LEVERAGE);
-  const leverage = Math.min(num(env, "LEVERAGE", 5), maxLeverage);
+  const apex = strategyName === "apex";
+  const maxLeverage = Math.min(num(env, "MAX_LEVERAGE", apex ? 40 : 5), HARD_MAX_LEVERAGE);
+  const leverage = Math.min(num(env, "LEVERAGE", apex ? 40 : 5), maxLeverage);
   const paperStartEquity = num(env, "PAPER_START_EQUITY", 1000);
   const maxAccountEquityRaw = env["MAX_ACCOUNT_EQUITY"];
   const risk: RiskConfig = {
     leverage,
     maxLeverage,
-    sizeFraction: num(env, "SIZE_FRACTION", 0.1),
-    riskPerTradePct: num(env, "RISK_PER_TRADE_PCT", 0.01),
-    compound: bool(env, "COMPOUND", false),
+    sizeFraction: num(env, "SIZE_FRACTION", apex ? 1 : 0.1),
+    riskPerTradePct: num(env, "RISK_PER_TRADE_PCT", apex ? 0.05 : 0.01),
+    dynamicLeverage: bool(env, "DYNAMIC_LEVERAGE", apex),
+    compound: bool(env, "COMPOUND", apex),
     baseEquity: paperStartEquity,
     hardStopRoe: num(env, "HARD_STOP_ROE", 0.4),
-    dailyLossLimitPct: num(env, "DAILY_LOSS_LIMIT_PCT", 0.05),
-    maxDrawdownPct: num(env, "MAX_DRAWDOWN_PCT", 0.25),
+    dailyLossLimitPct: num(env, "DAILY_LOSS_LIMIT_PCT", apex ? 0.25 : 0.05),
+    maxDrawdownPct: num(env, "MAX_DRAWDOWN_PCT", apex ? 0.6 : 0.25),
     minNotionalUsd: num(env, "MIN_NOTIONAL_USD", 10),
     maxAccountEquity: maxAccountEquityRaw ? Number(maxAccountEquityRaw) : null,
   };
@@ -140,7 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (leverage < 1) throw new Error("LEVERAGE must be >= 1");
 
   const universe = str(env, "UNIVERSE", DEFAULT_UNIVERSE.join(",")).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  const interval = str(env, "CANDLE_INTERVAL", strategyName === "reclaim" ? "15m" : "1h") as Interval;
+  const interval = str(env, "CANDLE_INTERVAL", strategyName === "donchian" ? "1h" : "15m") as Interval;
   const contextInterval = str(env, "CONTEXT_INTERVAL", interval === "15m" ? "1h" : interval === "1h" ? "4h" : "1d") as Interval;
 
   const cfg: AppConfig = {

@@ -22,7 +22,7 @@ export interface AssetSpec {
 }
 
 export interface StrategyParams {
-  name: "reclaim" | "donchian";
+  name: "reclaim" | "donchian" | "apex";
   /** breakout lookback (candles) */
   lookback: number;
   /** volume must exceed volumeMult * avg(volume over volumeAvgN) */
@@ -50,6 +50,13 @@ export interface StrategyParams {
   atrN: number;
   allowLong: boolean;
   allowShort: boolean;
+  /** pyramiding: max units per position (1 = off) */
+  maxUnits: number;
+  /** add the next unit after this many ATR of favourable movement since the last fill */
+  addEveryAtr: number;
+  /** apex: 4h Kaufman efficiency ratio must exceed this (0 = off) */
+  regimeErMin: number;
+  regimeErN: number;
 }
 
 export interface EntrySignal {
@@ -98,6 +105,12 @@ export interface Position {
   fees: number;
   /** exchange stop order id in live mode */
   stopOrderId?: number | null;
+  /** pyramiding */
+  units: number;
+  /** price of the most recent unit fill (add trigger reference) */
+  lastFillPrice: number;
+  /** equity when the position was opened (for pnl% / Monte Carlo) */
+  equityBefore: number;
 }
 
 export interface Trade {
@@ -124,6 +137,8 @@ export interface Trade {
   roe: number;
   reasonEntry: string;
   reasonExit: string;
+  units?: number;
+  equityBefore?: number | null;
 }
 
 export interface AccountState {
@@ -146,6 +161,8 @@ export interface RiskConfig {
   sizeFraction: number;
   /** optional cap: risk at most this fraction of equity between entry and stop (0 = off); never increases size */
   riskPerTradePct: number;
+  /** true: leverage per trade = the smallest that keeps the structural stop inside the hard ROE stop (capped by maxLeverage / exchange max) */
+  dynamicLeverage: boolean;
   compound: boolean;
   /** base equity used for sizing when compounding is off */
   baseEquity: number;

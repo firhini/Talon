@@ -56,12 +56,71 @@ export function migrate(db: DB): void {
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, mode TEXT NOT NULL, level TEXT NOT NULL, msg TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, status TEXT NOT NULL, args TEXT NOT NULL,
+    created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER, log TEXT NOT NULL DEFAULT '', result TEXT, pid INTEGER
+  );
   CREATE TABLE IF NOT EXISTS bot_state (
     mode TEXT PRIMARY KEY, status TEXT NOT NULL, last_tick INTEGER NOT NULL, equity REAL NOT NULL,
     day_start_equity REAL NOT NULL, peak_equity REAL NOT NULL, halted INTEGER NOT NULL, halt_reason TEXT,
     started_at INTEGER NOT NULL, run_id TEXT NOT NULL, info TEXT
   );
   `);
+  // additive migrations
+  const cols = (db.prepare(`PRAGMA table_info(trades)`).all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes("units")) db.exec(`ALTER TABLE trades ADD COLUMN units INTEGER NOT NULL DEFAULT 1`);
+  if (!cols.includes("equity_before")) db.exec(`ALTER TABLE trades ADD COLUMN equity_before REAL`);
+}
+
+// ---------- settings (dashboard-managed configuration; never secrets) ----------
+export function getSetting(db: DB, key: string): string | null {
+  const r = db.prepare(`SELECT value FROM settings WHERE key=?`).get(key) as { value: string } | undefined;
+  return r?.value ?? null;
+}
+export function allSettings(db: DB): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of db.prepare(`SELECT key, value FROM settings ORDER BY key`).all() as { key: string; value: string }[]) out[r.key] = r.value;
+  return out;
+}
+export function setSettings(db: DB, kv: Record<string, string | null>): void {
+  const up = db.prepare(`INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES (?,?,?)`);
+  const del = db.prepare(`DELETE FROM settings WHERE key=?`);
+  db.transaction(() => { for (const [k, v] of Object.entries(kv)) { if (v === null || v === "") del.run(k); else up.run(k, v, Date.now()); } })();
+}
+
+// ---------- jobs (data fetch / backtest / sweep runs started from the dashboard) ----------
+export type JobKind = "fetch" | "backtest" | "sweep" | "scan";
+export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
+export interface JobRow { id: number; kind: JobKind; status: JobStatus; args: Record<string, unknown>; createdAt: number; startedAt: number | null; finishedAt: number | null; log: string; result: unknown; pid: number | null }
+export function createJob(db: DB, kind: JobKind, args: Record<string, unknown>): number {
+  return Number(db.prepare(`INSERT INTO jobs(kind,status,args,created_at) VALUES (?,?,?,?)`).run(kind, "queued", JSON.stringify(args), Date.now()).lastInsertRowid);
+}
+export function updateJob(db: DB, id: number, patch: { status?: JobStatus; startedAt?: number; finishedAt?: number; appendLog?: string; result?: unknown; pid?: number | null }): void {
+  const sets: string[] = [], vals: unknown[] = [];
+  if (patch.status) { sets.push("status=?"); vals.push(patch.status); }
+  if (patch.startedAt !== undefined) { sets.push("started_at=?"); vals.push(patch.startedAt); }
+  if (patch.finishedAt !== undefined) { sets.push("finished_at=?"); vals.push(patch.finishedAt); }
+  if (patch.appendLog) { sets.push("log=substr(log || ?, -200000)"); vals.push(patch.appendLog); }
+  if (patch.result !== undefined) { sets.push("result=?"); vals.push(JSON.stringify(patch.result)); }
+  if (patch.pid !== undefined) { sets.push("pid=?"); vals.push(patch.pid); }
+  if (!sets.length) return;
+  db.prepare(`UPDATE jobs SET ${sets.join(",")} WHERE id=?`).run(...vals, id);
+}
+function rowToJob(r: Record<string, unknown>): JobRow {
+  return { id: r.id as number, kind: r.kind as JobKind, status: r.status as JobStatus, args: JSON.parse(r.args as string), createdAt: r.created_at as number, startedAt: (r.started_at as number) ?? null, finishedAt: (r.finished_at as number) ?? null, log: r.log as string, result: r.result ? JSON.parse(r.result as string) : null, pid: (r.pid as number) ?? null };
+}
+export function getJob(db: DB, id: number): JobRow | null {
+  const r = db.prepare(`SELECT * FROM jobs WHERE id=?`).get(id) as Record<string, unknown> | undefined;
+  return r ? rowToJob(r) : null;
+}
+export function listJobs(db: DB, limit = 30): JobRow[] {
+  return (db.prepare(`SELECT id,kind,status,args,created_at,started_at,finished_at,substr(log,-4000) log,result,pid FROM jobs ORDER BY id DESC LIMIT ?`).all(limit) as Record<string, unknown>[]).map(rowToJob);
+}
+export function runningJobs(db: DB): JobRow[] {
+  return (db.prepare(`SELECT * FROM jobs WHERE status IN ('queued','running') ORDER BY id`).all() as Record<string, unknown>[]).map(rowToJob);
 }
 
 // ---------- candles ----------
@@ -90,8 +149,8 @@ export function loadFunding(db: DB, coin: string, from = 0, to = Number.MAX_SAFE
 
 // ---------- trades ----------
 export function insertTrade(db: DB, tr: Trade): number {
-  const r = db.prepare(`INSERT INTO trades(mode,run_id,coin,side,leverage,qty,entry_price,entry_time,exit_price,exit_time,stop_price,tp_price,gross_pnl,fees,funding,pnl,roe,reason_entry,reason_exit)
-    VALUES (@mode,@runId,@coin,@side,@leverage,@qty,@entryPrice,@entryTime,@exitPrice,@exitTime,@stopPrice,@tpPrice,@grossPnl,@fees,@funding,@pnl,@roe,@reasonEntry,@reasonExit)`).run(tr);
+  const r = db.prepare(`INSERT INTO trades(mode,run_id,coin,side,leverage,qty,entry_price,entry_time,exit_price,exit_time,stop_price,tp_price,gross_pnl,fees,funding,pnl,roe,reason_entry,reason_exit,units,equity_before)
+    VALUES (@mode,@runId,@coin,@side,@leverage,@qty,@entryPrice,@entryTime,@exitPrice,@exitTime,@stopPrice,@tpPrice,@grossPnl,@fees,@funding,@pnl,@roe,@reasonEntry,@reasonExit,@units,@equityBefore)`).run({ units: 1, equityBefore: null, ...tr });
   return Number(r.lastInsertRowid);
 }
 export function listTrades(db: DB, mode: Mode, limit = 200): Trade[] {
@@ -103,7 +162,7 @@ function rowToTrade(r: Record<string, unknown>): Trade {
     leverage: r.leverage as number, qty: r.qty as number, entryPrice: r.entry_price as number, entryTime: r.entry_time as number,
     exitPrice: r.exit_price as number, exitTime: r.exit_time as number, stopPrice: r.stop_price as number, tpPrice: r.tp_price as number | null,
     grossPnl: r.gross_pnl as number, fees: r.fees as number, funding: r.funding as number, pnl: r.pnl as number, roe: r.roe as number,
-    reasonEntry: r.reason_entry as string, reasonExit: r.reason_exit as string,
+    reasonEntry: r.reason_entry as string, reasonExit: r.reason_exit as string, units: (r.units as number) ?? 1, equityBefore: (r.equity_before as number | null) ?? null,
   };
 }
 

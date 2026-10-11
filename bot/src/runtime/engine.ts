@@ -213,6 +213,7 @@ export class Engine {
       const pos: Position = {
         coin: o.coin, side: o.side, qty: r.fill.qty, entryPrice: r.fill.price, entryTime: r.fill.time, leverage: o.leverage, margin: (r.fill.qty * r.fill.price) / o.leverage,
         stopPrice: r.stop, tpPrice: r.tp, initialStop: r.stop, atr: best.atr, bestPrice: r.fill.price, barsHeld: 0, reasonEntry: o.reason, funding: 0, fees: r.fill.fee, stopOrderId: r.stopOrderId,
+        units: 1, lastFillPrice: r.fill.price, equityBefore: this.acct.equity,
       };
       this.acct.position = pos;
       if (this.exec instanceof PaperExecutor) this.exec.setPosition(pos);
@@ -315,7 +316,7 @@ export class Engine {
       const stopOrderId = await live.ensureStop(ex.coin, ex.side, ex.qty, ex.entryPx, ex.leverage);
       if (!this.acct.position) {
         const stop = this.guard.finalStop(ex.coin, ex.side, ex.entryPx, ex.side === "long" ? 0 : Infinity, ex.leverage);
-        this.acct.position = { coin: ex.coin, side: ex.side, qty: ex.qty, entryPrice: ex.entryPx, entryTime: Date.now(), leverage: ex.leverage, margin: ex.margin, stopPrice: stop, tpPrice: null, initialStop: stop, atr: 0, bestPrice: ex.entryPx, barsHeld: 0, reasonEntry: "adopted from exchange", funding: 0, fees: 0, stopOrderId };
+        this.acct.position = { coin: ex.coin, side: ex.side, qty: ex.qty, entryPrice: ex.entryPx, entryTime: Date.now(), leverage: ex.leverage, margin: ex.margin, stopPrice: stop, tpPrice: null, initialStop: stop, atr: 0, bestPrice: ex.entryPx, barsHeld: 0, reasonEntry: "adopted from exchange", funding: 0, fees: 0, stopOrderId, units: 1, lastFillPrice: ex.entryPx, equityBefore: this.acct.equity };
         savePosition(this.db, this.mode, this.acct.position);
       }
     }

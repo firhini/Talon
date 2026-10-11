@@ -175,6 +175,7 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
         const p: Position = {
           coin: o.coin, side: o.side, qty: o.qty, entryPrice: fill, entryTime: T, leverage: o.leverage, margin: (o.qty * fill) / o.leverage,
           stopPrice: stop, tpPrice: tp, initialStop: stop, atr: pending.signal.atr, bestPrice: fill, barsHeld: 0, reasonEntry: o.reason, funding: 0, fees: fee,
+          units: 1, lastFillPrice: fill, equityBefore: acct.equity,
         };
         if (stopDist > 0 && (o.side === "long" ? stop < fill : stop > fill)) {
           acct.position = p;

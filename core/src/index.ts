@@ -6,6 +6,8 @@ export * from "./strategy.js";
 export * from "./risk.js";
 export * from "./scan.js";
 export * from "./backtest.js";
+export * from "./presets.js";
+export * from "./montecarlo.js";
 export * from "./db.js";
 export * from "./data/okx.js";
 export * from "./data/hyperliquid.js";
