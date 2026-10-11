@@ -36,7 +36,7 @@ export function buildEntryOrder(spec: AssetSpec, side: Side, qty: number, mark: 
 }
 
 /** Reduce-only stop-market (and optional take-profit) protecting a position. */
-export function buildProtectiveOrders(spec: AssetSpec, side: Side, qty: number, stopPx: number, tpPx: number | null, slipBand = 0.03): HlOrder[] {
+export function buildProtectiveOrders(spec: AssetSpec, side: Side, qty: number, stopPx: number, tpPx: number | null, slipBand = 0.05): HlOrder[] {
   const closeIsBuy = side === "short";
   const stopLimit = roundPrice(closeIsBuy ? stopPx * (1 + slipBand) : stopPx * (1 - slipBand), spec.szDecimals);
   const out: HlOrder[] = [{

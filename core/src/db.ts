@@ -167,8 +167,10 @@ export function getControl(db: DB, key: string): string | null {
   const r = db.prepare(`SELECT value FROM control WHERE key=?`).get(key) as { value: string } | undefined;
   return r?.value ?? null;
 }
-/** Dashboard enqueues a command; bot consumes it. */
+/** Dashboard enqueues a command; bot consumes it. A pending `kill` is never overwritten; a new `kill` always wins. */
 export function enqueueCommand(db: DB, mode: Mode, cmd: ControlCommand): void {
+  const pending = getControl(db, `cmd:${mode}`);
+  if (pending === "kill" && cmd !== "kill") return;
   setControl(db, `cmd:${mode}`, cmd);
 }
 export function takeCommand(db: DB, mode: Mode): ControlCommand | null {

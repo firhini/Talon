@@ -9,11 +9,14 @@ export class PaperExecutor implements Executor {
 
   setPosition(p: Position | null): void { this.position = p; }
 
+  private lastEquity: number | null = null;
   async equity(): Promise<number> {
     const p = this.position;
     if (!p) return this.cash;
     const m = this.mark();
-    return this.cash + grossPnl(p.side, p.entryPrice, m, p.qty) - p.fees + p.funding;
+    if (!(m > 0)) return this.lastEquity ?? this.cash; // no quote: keep the last known value
+    this.lastEquity = this.cash + grossPnl(p.side, p.entryPrice, m, p.qty) - p.fees + p.funding;
+    return this.lastEquity;
   }
 
   async open(order: ApprovedOrder, mark: number, protect: (fillPx: number) => { stop: number; tp: number | null }): Promise<{ fill: Fill; stopOrderId: number | null; stop: number; tp: number | null }> {
@@ -27,6 +30,7 @@ export class PaperExecutor implements Executor {
 
   /** Close at `mark` (stop/tp price or current mid) with slippage. */
   async close(pos: Position, mark: number, _reason: string): Promise<Fill> {
+    if (!(mark > 0)) throw new Error(`no quote for ${pos.coin}; cannot price the close`);
     const price = slippedPrice(mark, isBuy(pos.side, "close"), this.fees.slippageBps);
     const fee = feeCost(pos.qty * price, this.fees.takerFeeBps);
     const net = grossPnl(pos.side, pos.entryPrice, price, pos.qty) - pos.fees - fee + pos.funding;

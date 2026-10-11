@@ -10,7 +10,7 @@ web/    @talon/web   dashboard (equity curve, position, scan table, trade log, b
 
 Modes (`MODE` env): `backtest` | `paper` (default) | `live`. The same strategy and RiskGuard code runs in all three; only the executor differs.
 
-> **Reality check.** No strategy is guaranteed to make money. The backtests in [`BACKTEST.md`](BACKTEST.md) are honest: they include taker fees, slippage and real funding history and are split into in-sample and out-of-sample periods. The brief's 15m reclaim strategy **loses after fees** (−3.5 % over 13 months); the default therefore is a 1h Donchian trend-following variant that was profitable in both periods (+31.7 %, max drawdown 17.8 %, profit factor 1.18) — a thin edge that needs trends. Read the report before you risk anything. Start in paper mode.
+> **Reality check.** No strategy is guaranteed to make money. The backtests in [`BACKTEST.md`](BACKTEST.md) are honest: they include taker fees, slippage and real funding history and are split into in-sample and out-of-sample periods. The brief's 15m reclaim strategy **loses after fees** (−6.0 % over 13 months); the default therefore is a 1h Donchian trend-following variant that was profitable in both periods (+26.7 %, max drawdown 18.0 %, profit factor 1.15) — a thin edge that needs trends. Read the report before you risk anything. Start in paper mode.
 
 ---
 
@@ -62,7 +62,7 @@ HL_ACCOUNT_ADDRESS=0x…        # your master account
 HL_PRIVATE_KEY=0x…            # the API wallet key (trading-only), never your main key
 ```
 
-Then `npm run bot`. In live mode every entry is a marketable IOC order and, before the call returns, a **reduce-only stop-market order** (plus the take-profit trigger) is resting on the exchange. If the stop cannot be placed the position is closed immediately. On every tick the bot reconciles with the exchange: a stop/TP fill is recorded from your fills, a missing stop is re-placed, and an unknown position in the universe is adopted and protected with the hard ROE stop.
+Then `npm run bot`. At start the bot checks that the key really is an authorised API wallet of `HL_ACCOUNT_ADDRESS` (Hyperliquid's `extraAgents` list) and that the account is below `MAX_ACCOUNT_EQUITY`. In live mode every entry is a marketable IOC order and, before the call returns, a **reduce-only stop-market order** is resting on the exchange (the take-profit trigger is placed right after, best-effort). If the stop cannot be placed the position is closed immediately. Closes are IOC orders retried with a widening price band; the stop is cancelled only once the exchange shows the position flat. On every tick the bot reconciles with the exchange: a stop/TP fill is recorded from your fills (funding from your funding history), a missing stop is re-placed at the tracked stop price, and an unknown position in the universe is adopted and protected with the hard ROE stop. A failed kill-switch flatten is retried every tick until it succeeds.
 
 Dashboard buttons: **Start** / **Pause** (no new entries, open position still managed) / **Kill switch** (flatten everything, cancel all orders, halt) / **Reset** (clear a halt; baselines reset; bot stays paused until you press Start). A halt from the daily-loss limit or max-drawdown switch survives restarts: the bot comes back halted until you reset it.
 

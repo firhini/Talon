@@ -139,13 +139,13 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
         if (pos.side === "long") {
           if (k.o <= pos.stopPrice) { exitPx = sellSlip(k.o); reason = "stop (gap)"; }
           else if (k.l <= pos.stopPrice) { exitPx = sellSlip(pos.stopPrice); reason = pos.stopPrice > pos.initialStop ? "trailing stop" : "stop"; }
-          else if (pos.tpPrice !== null && k.o >= pos.tpPrice) { exitPx = k.o; reason = "take profit (gap)"; }
-          else if (pos.tpPrice !== null && k.h >= pos.tpPrice) { exitPx = pos.tpPrice; reason = "take profit"; }
+          else if (pos.tpPrice !== null && k.o >= pos.tpPrice) { exitPx = sellSlip(k.o); reason = "take profit (gap)"; }
+          else if (pos.tpPrice !== null && k.h >= pos.tpPrice) { exitPx = sellSlip(pos.tpPrice); reason = "take profit"; }
         } else {
           if (k.o >= pos.stopPrice) { exitPx = sellSlip(k.o); reason = "stop (gap)"; }
           else if (k.h >= pos.stopPrice) { exitPx = sellSlip(pos.stopPrice); reason = pos.stopPrice < pos.initialStop ? "trailing stop" : "stop"; }
-          else if (pos.tpPrice !== null && k.o <= pos.tpPrice) { exitPx = k.o; reason = "take profit (gap)"; }
-          else if (pos.tpPrice !== null && k.l <= pos.tpPrice) { exitPx = pos.tpPrice; reason = "take profit"; }
+          else if (pos.tpPrice !== null && k.o <= pos.tpPrice) { exitPx = sellSlip(k.o); reason = "take profit (gap)"; }
+          else if (pos.tpPrice !== null && k.l <= pos.tpPrice) { exitPx = sellSlip(pos.tpPrice); reason = "take profit"; }
         }
         if (exitPx !== null) {
           closeTrade(pos, exitPx, Tc, reason, maker);
@@ -168,21 +168,22 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
         const o = pending.order;
         const fill = slippedPrice(k.o, isBuy(o.side, "open"), fees.slippageBps);
         const fee = feeCost(o.qty * fill, fees.takerFeeBps);
-        const stop = guard.finalStop(o.coin, o.side, fill, pending.signal.stopPrice, o.leverage);
+        const sigDist = Math.abs(pending.signal.refPrice - pending.signal.stopPrice);
+        const stop = guard.finalStop(o.coin, o.side, fill, o.side === "long" ? fill - sigDist : fill + sigDist, o.leverage);
         const stopDist = Math.abs(fill - stop);
-        const tp = o.tpPrice === null ? null : (o.side === "long" ? fill + params.rMultiple * Math.abs(fill - pending.signal.stopPrice) : fill - params.rMultiple * Math.abs(fill - pending.signal.stopPrice));
+        const tp = o.tpPrice === null ? null : (o.side === "long" ? fill + params.rMultiple * sigDist : fill - params.rMultiple * sigDist);
         const p: Position = {
           coin: o.coin, side: o.side, qty: o.qty, entryPrice: fill, entryTime: T, leverage: o.leverage, margin: (o.qty * fill) / o.leverage,
           stopPrice: stop, tpPrice: tp, initialStop: stop, atr: pending.signal.atr, bestPrice: fill, barsHeld: 0, reasonEntry: o.reason, funding: 0, fees: fee,
         };
-        if (stopDist > 0) {
+        if (stopDist > 0 && (o.side === "long" ? stop < fill : stop > fill)) {
           acct.position = p;
           lastFundingHour = Math.floor(T / 3_600_000) * 3_600_000;
           // the entry candle itself can hit the stop
           const sellSlip = (px: number) => slippedPrice(px, isBuy(p.side, "close"), fees.slippageBps);
           if (p.side === "long" && k.l <= p.stopPrice) closeTrade(p, sellSlip(p.stopPrice), Tc, "stop (entry bar)");
           else if (p.side === "short" && k.h >= p.stopPrice) closeTrade(p, sellSlip(p.stopPrice), Tc, "stop (entry bar)");
-          else if (p.tpPrice !== null && (p.side === "long" ? k.h >= p.tpPrice : k.l <= p.tpPrice)) closeTrade(p, p.tpPrice, Tc, "take profit (entry bar)");
+          else if (p.tpPrice !== null && (p.side === "long" ? k.h >= p.tpPrice : k.l <= p.tpPrice)) closeTrade(p, sellSlip(p.tpPrice), Tc, "take profit (entry bar)");
         }
       }
       pending = null;
@@ -236,21 +237,21 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
     }
   }
 
-  // close any open position at the end
+  // close any open position at the end of the window
   if (acct.position) {
     const s = series[acct.position.coin];
-    const k = s[s.length - 1];
+    const lastT = times[times.length - 1];
+    const k = s[Math.min(s.length - 1, idx[acct.position.coin].get(lastT) ?? s.length - 1)];
     closeTrade(acct.position, slippedPrice(k.c, isBuy(acct.position.side, "close"), fees.slippageBps), k.t + ims, "end of backtest");
     equityCurve.push({ t: k.t + ims, equity: cash });
   }
 
   const metrics = computeMetrics(trades, equityCurve, input.startEquity, ims);
-  // without fees / funding: same trades, gross pnl only
-  let eq = input.startEquity;
-  const curveNoFees = [{ t: equityCurve[0]?.t ?? 0, equity: eq }];
-  const tradesNoFees = trades.map((t) => ({ ...t, fees: 0, funding: 0, pnl: t.grossPnl, roe: roeOf(t.grossPnl, (t.qty * t.entryPrice) / t.leverage) }));
-  for (const t of tradesNoFees) { eq += t.pnl; curveNoFees.push({ t: t.exitTime, equity: eq }); }
-  const metricsNoFees = computeMetrics(tradesNoFees, curveNoFees, input.startEquity, ims);
+  // without costs: a real second pass with zero fees, slippage and funding (not the same trades: no cost-driven halts)
+  const costless = fees.takerFeeBps === 0 && fees.makerFeeBps === 0 && fees.slippageBps === 0 && fees.defaultHourlyFunding === 0 && Object.keys(input.funding).length === 0;
+  const noFees = costless ? null : runBacktest({ ...input, fees: { takerFeeBps: 0, makerFeeBps: 0, slippageBps: 0, defaultHourlyFunding: 0 }, funding: {} }, label);
+  const metricsNoFees = noFees ? noFees.metrics : metrics;
+  const curveNoFees = noFees ? noFees.equityCurve : equityCurve;
 
   return {
     label, params, risk, fees, from: times[0] ?? 0, to: times[times.length - 1] ?? 0, startEquity: input.startEquity,
@@ -341,6 +342,6 @@ export function formatReport(r: BacktestResult): string {
     `exits: ${Object.entries(m.exitReasons).map(([k, v]) => `${k}=${v}`).join(", ")}`,
   ];
   if (r.haltedAt) lines.push(`KILL SWITCH at ${new Date(r.haltedAt).toISOString()}: ${r.haltReason}`);
-  if (r.dailyHalts) lines.push(`daily-loss halts: ${r.dailyHalts}`);
+  if (r.dailyHalts) lines.push(`daily-loss halts: ${r.dailyHalts} (auto-resumed next UTC day in backtest; the live bot stays halted until manual reset)`);
   return lines.join("\n");
 }

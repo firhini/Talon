@@ -11,7 +11,8 @@ export type RiskDecision = { ok: true; order: ApprovedOrder } | { ok: false; rea
 export class RiskGuard {
   constructor(public readonly cfg: RiskConfig, private readonly specs: Map<string, AssetSpec>) {
     if (cfg.maxLeverage > HARD_MAX_LEVERAGE) throw new Error(`maxLeverage ${cfg.maxLeverage} exceeds hard ceiling ${HARD_MAX_LEVERAGE}`);
-    if (cfg.hardStopRoe <= 0 || cfg.hardStopRoe >= 1) throw new Error("hardStopRoe must be in (0,1)");
+    // isolated-margin liquidation sits near -50% ROE (maintenance = half the initial margin); the hard stop must come first
+    if (cfg.hardStopRoe <= 0 || cfg.hardStopRoe > 0.45) throw new Error("hardStopRoe must be in (0, 0.45]");
   }
 
   spec(coin: string): AssetSpec | undefined {

@@ -20,12 +20,18 @@ export class Engine {
   private mids: Record<string, number> = {};
   private candles: Record<string, { primary: Candle[]; context: Candle[] }> = {};
   private stopping = false;
+  /** a halt whose flatten failed; retried every tick */
+  private flattenPending: string | null = null;
+  private quoteWarned = false;
 
   constructor(
     private readonly cfg: AppConfig, private readonly db: DB, private readonly guard: RiskGuard, private readonly specs: Map<string, AssetSpec>,
-    private readonly info: HyperliquidInfo, private readonly exec: Executor, private readonly log: (s: string) => void, initialEquity: number, restored: { halted: boolean; haltReason: string | null; peak?: number; dayStart?: number; status?: Status },
+    private readonly info: HyperliquidInfo, private readonly exec: Executor, private readonly log: (s: string) => void, initialEquity: number,
+    restored: { halted: boolean; haltReason: string | null; peak?: number; dayStart?: number; status?: Status; lastTick?: number },
   ) {
     this.acct = { equity: initialEquity, dayStartEquity: restored.dayStart ?? initialEquity, peakEquity: restored.peak ?? initialEquity, dayPnl: 0, position: null, halted: restored.halted, haltReason: restored.haltReason };
+    // seed the day-roll clock from the last persisted tick so a restart does not reset the daily-loss baseline
+    this.lastTs = restored.lastTick ?? null;
     if (restored.halted) this.status = "halted"; else if (restored.status) this.status = restored.status;
   }
 
@@ -60,9 +66,16 @@ export class Engine {
     const now = Date.now();
     await this.handleCommand();
     await this.refreshMids();
+    if (this.flattenPending) await this.halt(this.flattenPending, true);
     if (this.exec.kind === "live") await this.reconcileLive();
-    await this.applyPaperFunding(now);
-    await this.checkPaperStops();
+    const pos = this.acct.position;
+    if (pos && !(this.mark(pos.coin) > 0)) {
+      if (!this.quoteWarned) { this.log(`no quote for ${pos.coin}; skipping stop/equity checks this tick`); this.quoteWarned = true; }
+    } else {
+      this.quoteWarned = false;
+      await this.applyPaperFunding(now);
+      await this.checkPaperStops();
+    }
 
     // equity, day roll, halts
     const equity = await this.exec.equity();
@@ -98,6 +111,7 @@ export class Engine {
     if (cmd === "start" && !this.acct.halted) this.status = "running";
     else if (cmd === "pause" && !this.acct.halted) this.status = "paused";
     else if (cmd === "kill") await this.halt("manual kill switch");
+    else if (cmd === "start" || cmd === "pause") logEvent(this.db, this.mode, "warn", `'${cmd}' ignored: bot is halted (${this.acct.haltReason}); send reset first`);
     else if (cmd === "reset") {
       this.acct.halted = false; this.acct.haltReason = null;
       this.acct.peakEquity = this.acct.equity; this.acct.dayStartEquity = this.acct.equity; this.acct.dayPnl = 0;
@@ -106,13 +120,23 @@ export class Engine {
     }
   }
 
-  private async halt(reason: string): Promise<void> {
-    if (this.acct.halted) return;
-    this.log(`HALT: ${reason}`);
-    logEvent(this.db, this.mode, "error", `HALT: ${reason} — flattening`);
+  /** Flatten everything and halt until manual reset. A failed flatten is retried on every tick until it succeeds. */
+  private async halt(reason: string, retry = false): Promise<void> {
+    if (!retry) {
+      this.log(`HALT: ${reason}`);
+      logEvent(this.db, this.mode, "error", `HALT: ${reason} — flattening`);
+    }
     this.acct.halted = true; this.acct.haltReason = reason; this.status = "halted";
-    if (this.acct.position) await this.closePosition(this.mark(this.acct.position.coin), reason);
-    await this.exec.flattenAll(reason);
+    try {
+      if (this.acct.position) await this.closePosition(this.mark(this.acct.position.coin), reason);
+      await this.exec.flattenAll(reason);
+      if (this.flattenPending) logEvent(this.db, this.mode, "warn", "flatten succeeded on retry");
+      this.flattenPending = null;
+    } catch (e) {
+      this.flattenPending = reason;
+      this.log(`!! flatten failed (${(e as Error).message}); will retry next tick`);
+      if (!retry) logEvent(this.db, this.mode, "error", `flatten failed: ${(e as Error).message} — retrying every tick`);
+    }
     this.persist();
   }
 
@@ -206,10 +230,17 @@ export class Engine {
     const pos = this.acct.position;
     if (!pos) return;
     const fill = fillOverride ?? (await this.exec.close(pos, price, reason));
-    this.recordTrade(pos, fill, reason);
+    if (this.exec instanceof LiveExecutor) {
+      try { pos.funding = await this.exec.fundingSince(pos.coin, pos.entryTime); } catch (e) { this.log(`warn: funding lookup failed: ${(e as Error).message}`); }
+    }
     this.acct.position = null;
     if (this.exec instanceof PaperExecutor) this.exec.setPosition(null);
-    savePosition(this.db, this.mode, null);
+    // trade row, position row and bot state change together
+    this.db.transaction(() => {
+      this.recordTrade(pos, fill, reason);
+      savePosition(this.db, this.mode, null);
+      this.persist();
+    })();
   }
 
   private recordTrade(pos: Position, fill: { price: number; qty: number; fee: number; time: number }, reason: string): void {
@@ -234,7 +265,9 @@ export class Engine {
     if (!m) return;
     const stopHit = pos.side === "long" ? m <= pos.stopPrice : m >= pos.stopPrice;
     const tpHit = pos.tpPrice !== null && (pos.side === "long" ? m >= pos.tpPrice : m <= pos.tpPrice);
-    if (stopHit) await this.closePosition(pos.stopPrice, pos.stopPrice === pos.initialStop ? "stop" : "trailing stop");
+    // a stop-market fills at the trigger or worse if the quote already gapped through it
+    const stopFill = pos.side === "long" ? Math.min(pos.stopPrice, m) : Math.max(pos.stopPrice, m);
+    if (stopHit) await this.closePosition(stopFill, pos.stopPrice === pos.initialStop ? "stop" : "trailing stop");
     else if (tpHit) await this.closePosition(pos.tpPrice!, "take profit");
   }
 
@@ -269,15 +302,16 @@ export class Engine {
         return;
       }
       if (Math.abs(ex.qty - pos.qty) > 1e-9) { this.log(`position size changed on exchange: ${pos.qty} → ${ex.qty}`); pos.qty = ex.qty; }
-      if (pos.stopOrderId && !(await live.findStopOrder(pos.coin))) {
-        this.log(`!! stop order missing for ${pos.coin}; re-placing`);
-        pos.stopOrderId = await live.ensureStop(pos.coin, pos.side, pos.qty, pos.entryPrice, pos.leverage);
+      if (!(await live.findStopOrder(pos.coin))) {
+        this.log(`!! stop order missing for ${pos.coin}; re-placing at ${pos.stopPrice}`);
+        logEvent(this.db, this.mode, "warn", `${pos.coin}: stop order missing on exchange, re-placed at ${pos.stopPrice}`);
+        pos.stopOrderId = await live.ensureStop(pos.coin, pos.side, pos.qty, pos.entryPrice, pos.leverage, pos.stopPrice);
       }
     }
     for (const ex of positions) {
       if (pos && ex.coin === pos.coin) continue;
       this.log(`!! adopting unknown exchange position ${ex.coin} ${ex.side} ${ex.qty}`);
-      logEvent(this.db, this.mode, "warn", `adopted exchange position ${ex.coin} ${ex.side} ${ex.qty} @ ${ex.entryPx}`);
+      logEvent(this.db, this.mode, "warn", `adopted exchange position ${ex.coin} ${ex.side} ${ex.qty} @ ${ex.entryPx} (${ex.leverage}x)${ex.leverage > this.guard.cfg.maxLeverage ? " — leverage above the configured cap; reduce it manually" : ""}`);
       const stopOrderId = await live.ensureStop(ex.coin, ex.side, ex.qty, ex.entryPx, ex.leverage);
       if (!this.acct.position) {
         const stop = this.guard.finalStop(ex.coin, ex.side, ex.entryPx, ex.side === "long" ? 0 : Infinity, ex.leverage);
@@ -310,6 +344,7 @@ export class Engine {
         strategy: this.cfg.strategy.name, interval: this.cfg.interval, universe: this.cfg.universe, leverage: this.cfg.risk.leverage, sizeFraction: this.cfg.risk.sizeFraction,
         dailyLossLimitPct: this.cfg.risk.dailyLossLimitPct, maxDrawdownPct: this.cfg.risk.maxDrawdownPct, hardStopRoe: this.cfg.risk.hardStopRoe, mids: this.mids,
         cash: this.exec instanceof PaperExecutor ? this.exec.cash : null, lastCandle: this.lastCandleT, testnet: this.cfg.live.testnet,
+        baseEquity: this.guard.cfg.baseEquity, lastStatus: this.status, flattenPending: this.flattenPending,
       },
     });
     if (pos) savePosition(this.db, this.mode, pos);
