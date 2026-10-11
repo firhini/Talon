@@ -22,6 +22,8 @@ export class Engine {
   private stopping = false;
   /** a halt whose flatten failed; retried every tick */
   private flattenPending: string | null = null;
+  /** a pyramid add whose stop re-placement failed; retried every tick until the whole size is protected */
+  private reprotectPending = false;
   private quoteWarned = false;
 
   constructor(
@@ -67,6 +69,10 @@ export class Engine {
     await this.handleCommand();
     await this.refreshMids();
     if (this.flattenPending) await this.halt(this.flattenPending, true);
+    if (this.reprotectPending && this.acct.position) {
+      try { const oid = await this.exec.reprotect(this.acct.position); if (oid) this.acct.position.stopOrderId = oid; this.reprotectPending = false; logEvent(this.db, this.mode, "warn", "stop re-placed for the full position size on retry"); }
+      catch (e) { this.log(`reprotect retry failed: ${(e as Error).message}`); }
+    }
     if (this.exec.kind === "live") await this.reconcileLive();
     const pos = this.acct.position;
     if (pos && !(this.mark(pos.coin) > 0)) {
@@ -252,8 +258,8 @@ export class Engine {
       const cand = this.guard.finalStop(pos.coin, pos.side, pos.entryPrice, unitStop, pos.leverage);
       pos.stopPrice = pos.side === "long" ? Math.max(pos.stopPrice, cand) : Math.min(pos.stopPrice, cand);
       pos.reasonEntry = pos.reasonEntry.replace(/ \+\d+ units?$/, "") + ` +${pos.units - 1} unit${pos.units > 2 ? "s" : ""}`;
-      const oid = await this.exec.reprotect(pos);
-      if (oid) pos.stopOrderId = oid;
+      try { const oid = await this.exec.reprotect(pos); if (oid) pos.stopOrderId = oid; }
+      catch (e) { this.reprotectPending = true; this.log(`!! stop re-placement after add failed: ${(e as Error).message}; retrying every tick`); logEvent(this.db, this.mode, "error", `stop re-placement after add failed: ${(e as Error).message}`); }
       this.log(`ADD ${pos.coin} ${pos.side} unit ${pos.units}: +${fill.qty} @ ${fill.price} → qty ${pos.qty} avg ${pos.entryPrice.toFixed(4)} stop ${pos.stopPrice}`);
       logEvent(this.db, this.mode, "trade", `ADD ${pos.coin} ${pos.side} unit ${pos.units} +${fill.qty} @ ${fill.price} (stop ${pos.stopPrice})`);
       savePosition(this.db, this.mode, pos);
