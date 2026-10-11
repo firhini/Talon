@@ -39,7 +39,7 @@ The full grid (lookback 48/96, volume 1.5×/2×, stop 1/1.5 ATR, 2R/3R/trailing,
 | exits | TP 128 · stop 187 · channel 49 | |
 | kill switch / daily halts | none | |
 
-Selection was done on the first 8 months only; the last 5 months are out-of-sample (`npm run backtest -- --sweep --grid "lookback=48" --validate-from 2026-05-01`, research mode without kill switch):
+Selection was done on the first 8 months only; the last 5 months are out-of-sample (`npm run backtest -- --sweep --grid "lookback=48" --validate-from 2026-05-01`, research mode without kill switch; sizing is non-compounding, so the two halves are independent apart from daily-loss halts, of which there were none):
 
 | | in-sample 2025-09 → 2026-04 | out-of-sample 2026-05 → 2026-10 |
 |---|---:|---:|
