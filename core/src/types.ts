@@ -81,6 +81,8 @@ export interface ManageAction {
   newStop?: number;
   /** request full exit at market */
   exit?: { reason: string };
+  /** pyramiding: add one more unit at market with this structural stop */
+  addUnit?: { refPrice: number; stopPrice: number; atr: number };
 }
 
 export interface Position {

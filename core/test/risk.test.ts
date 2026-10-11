@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HARD_MAX_LEVERAGE } from "../src/config.js";
-import { RiskGuard, rollAccountDay } from "../src/risk.js";
+import { approveAdd, RiskGuard, rollAccountDay } from "../src/risk.js";
 import type { AccountState, AssetSpec, OrderIntent, RiskConfig } from "../src/types.js";
 
 const specs = new Map<string, AssetSpec>([
@@ -8,7 +8,7 @@ const specs = new Map<string, AssetSpec>([
   ["HYPE", { coin: "HYPE", assetIndex: 4, szDecimals: 2, maxLeverage: 10 }],
   ["ATOM", { coin: "ATOM", assetIndex: 9, szDecimals: 2, maxLeverage: 3 }],
 ]);
-const cfg: RiskConfig = { leverage: 5, maxLeverage: 5, sizeFraction: 0.2, riskPerTradePct: 0, compound: false, baseEquity: 1000, hardStopRoe: 0.4, dailyLossLimitPct: 0.05, maxDrawdownPct: 0.15, minNotionalUsd: 10, maxAccountEquity: null };
+const cfg: RiskConfig = { leverage: 5, maxLeverage: 5, sizeFraction: 0.2, riskPerTradePct: 0, dynamicLeverage: false, compound: false, baseEquity: 1000, hardStopRoe: 0.4, dailyLossLimitPct: 0.05, maxDrawdownPct: 0.15, minNotionalUsd: 10, maxAccountEquity: null };
 const acct = (o: Partial<AccountState> = {}): AccountState => ({ equity: 1000, dayStartEquity: 1000, peakEquity: 1000, dayPnl: 0, position: null, halted: false, haltReason: null, ...o });
 const intent = (o: Partial<OrderIntent> = {}): OrderIntent => ({ coin: "BTC", side: "long", refPrice: 80_000, stopPrice: 79_000, tpPrice: 83_000, leverage: 5, reason: "t", ...o });
 
@@ -26,9 +26,11 @@ describe("RiskGuard", () => {
     expect(d.order.__approved).toBe(true);
   });
   it("hard leverage ceiling in code", () => {
-    expect(() => new RiskGuard({ ...cfg, maxLeverage: 11 }, specs)).toThrow();
+    expect(() => new RiskGuard({ ...cfg, maxLeverage: HARD_MAX_LEVERAGE + 1 }, specs)).toThrow();
     const g10 = new RiskGuard({ ...cfg, leverage: 10, maxLeverage: 10 }, specs);
-    expect(g10.effectiveLeverage("BTC", 50)).toBe(HARD_MAX_LEVERAGE);
+    expect(g10.effectiveLeverage("BTC", 50)).toBe(10);
+    const g99 = new RiskGuard({ ...cfg, leverage: 99, maxLeverage: HARD_MAX_LEVERAGE }, specs);
+    expect(g99.effectiveLeverage("BTC", 99)).toBe(40); // exchange max for BTC
     expect(g10.effectiveLeverage("ATOM", 10)).toBe(3); // exchange max
     expect(g.effectiveLeverage("BTC", 10)).toBe(5); // configured cap
   });
@@ -97,5 +99,37 @@ describe("RiskGuard", () => {
     expect(a.peakEquity).toBe(1100);
     const b = rollAccountDay(acct({ dayStartEquity: 900 }), 950, 86_400_000 * 2 + 1000, 86_400_000 * 2 + 1);
     expect(b.dayStartEquity).toBe(900);
+  });
+});
+
+describe("dynamic leverage and pyramiding adds", () => {
+  const dyn: RiskConfig = { ...cfg, leverage: 40, maxLeverage: 40, dynamicLeverage: true, sizeFraction: 1, riskPerTradePct: 0.05, compound: true };
+  const g = new RiskGuard(dyn, specs);
+  it("picks the smallest leverage that keeps the stop inside the hard ROE stop, capped by the exchange", () => {
+    expect(g.effectiveLeverage("BTC", 40, 0.005)).toBe(40); // 0.36/0.005 = 72 → cap 40
+    expect(g.effectiveLeverage("BTC", 40, 0.02)).toBe(18); // 0.36/0.02
+    expect(g.effectiveLeverage("HYPE", 40, 0.005)).toBe(10); // exchange max
+    expect(g.effectiveLeverage("BTC", 40, 0.5)).toBe(1);
+  });
+  it("sizes by risk fraction of current equity and the stop is always inside the hard stop", () => {
+    const d = g.approve(intent({ refPrice: 80_000, stopPrice: 79_200, leverage: 40 }), acct({ equity: 100, peakEquity: 100, dayStartEquity: 100 })); // 1% stop
+    expect(d.ok).toBe(true);
+    if (!d.ok) return;
+    expect(d.order.leverage).toBe(36);
+    expect(d.order.notional).toBeLessThanOrEqual(100 * 0.05 / 0.01 + 1); // ≤ 500 notional
+    expect(d.order.stopPrice).toBe(79_200); // structural stop kept (hard stop at 80000*(1-0.4/36) ≈ 79111 is further)
+  });
+  it("approveAdd grows the position within budget, same leverage, stop inside the hard stop", () => {
+    const pos = { coin: "BTC", side: "long" as const, qty: 0.005, entryPrice: 80_000, entryTime: 0, leverage: 36, margin: 11.1, stopPrice: 79_200, tpPrice: null, initialStop: 79_200, atr: 400, bestPrice: 81_000, barsHeld: 3, reasonEntry: "", funding: 0, fees: 0, units: 1, lastFillPrice: 80_000, equityBefore: 100 };
+    const a = acct({ equity: 105, peakEquity: 105, dayStartEquity: 100 });
+    const d = approveAdd(g, pos, 81_000, 80_190, a, "add");
+    expect(d.ok).toBe(true);
+    if (!d.ok) return;
+    expect(d.order.leverage).toBe(36);
+    expect(d.order.qty).toBeGreaterThan(0);
+    expect(d.order.notional).toBeLessThanOrEqual(105 * 0.05 / 0.01 + 1);
+    const wide = approveAdd(g, pos, 81_000, 78_000, a, "add"); // 3.7% stop at 36x → outside hard stop
+    expect(wide.ok).toBe(false);
+    expect(approveAdd(g, pos, 81_000, 80_190, acct({ equity: 105, halted: true, haltReason: "x" }), "add").ok).toBe(false);
   });
 });

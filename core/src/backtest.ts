@@ -1,6 +1,7 @@
 import type { FeeConfig } from "./config.js";
 import { feeCost, fundingPayment, grossPnl, isBuy, roe as roeOf, slippedPrice } from "./fees.js";
-import { RiskGuard, rollAccountDay } from "./risk.js";
+import { monteCarlo, type MonteCarloResult } from "./montecarlo.js";
+import { approveAdd, RiskGuard, rollAccountDay } from "./risk.js";
 import { contextUpTo, evaluateEntry, INTERVAL_MS, manage, requiredCandles, requiredContext, type StrategyContext } from "./strategy.js";
 import type { AccountState, ApprovedOrder, AssetSpec, Candle, EntrySignal, Interval, Position, RiskConfig, StrategyParams, Trade } from "./types.js";
 
@@ -64,9 +65,12 @@ export interface BacktestResult {
   haltedAt: number | null;
   haltReason: string | null;
   dailyHalts: number;
+  /** bootstrap distribution of outcomes (null when fewer than 20 trades) */
+  mc: MonteCarloResult | null;
 }
 
 interface Pending { order: ApprovedOrder; signal: EntrySignal }
+interface PendingAdd { order: ApprovedOrder; stop: number }
 
 export function runBacktest(input: BacktestInput, label = "backtest"): BacktestResult {
   const { coins, params, fees, risk, specs } = input;
@@ -94,6 +98,7 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
   let acct: AccountState = { equity: cash, dayStartEquity: cash, peakEquity: cash, dayPnl: 0, position: null, halted: false, haltReason: null };
   let lastTs: number | null = null;
   let pending: Pending | null = null;
+  let pendingAdd: PendingAdd | null = null;
   let lastFundingHour = 0;
   let haltedUntilDay: number | null = null;
   let haltedAt: number | null = null, haltReason: string | null = null, dailyHalts = 0;
@@ -113,9 +118,10 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
     trades.push({
       mode: "backtest", runId, coin: pos.coin, side: pos.side, leverage: pos.leverage, qty: pos.qty, entryPrice: pos.entryPrice, entryTime: pos.entryTime,
       exitPrice: exitPx, exitTime, stopPrice: pos.initialStop, tpPrice: pos.tpPrice, grossPnl: gross, fees: totalFees, funding: pos.funding, pnl: net,
-      roe: roeOf(net, pos.margin), reasonEntry: pos.reasonEntry, reasonExit: reason,
+      roe: roeOf(net, pos.margin), reasonEntry: pos.reasonEntry, reasonExit: reason, units: pos.units, equityBefore: pos.equityBefore,
     });
     acct.position = null;
+    pendingAdd = null;
   };
 
   for (const T of times) {
@@ -155,9 +161,41 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
           const ctx = makeCtx(pos.coin, series[pos.coin], i, input.context[pos.coin] ?? [], W, WC, cms, Tc, params);
           const act = manage(ctx, pos);
           if (act?.exit) closeTrade(pos, sellSlip(k.c), Tc, act.exit.reason);
-          else if (act?.newStop !== undefined) pos.stopPrice = guard.finalStop(pos.coin, pos.side, pos.entryPrice, act.newStop, pos.leverage);
+          else {
+            if (act?.newStop !== undefined) pos.stopPrice = guard.finalStop(pos.coin, pos.side, pos.entryPrice, act.newStop, pos.leverage);
+            if (act?.addUnit && !pendingAdd && !acct.halted) {
+              const d = approveAdd(guard, pos, act.addUnit.refPrice, act.addUnit.stopPrice, { ...acct, equity: cash + unrealizedOf(pos, k.c) }, "pyramid add");
+              if (d.ok) pendingAdd = { order: d.order, stop: act.addUnit.stopPrice };
+            }
+          }
         }
       }
+    }
+
+    // ---- fill a pending pyramid add at this candle's open ----
+    if (pendingAdd && acct.position && !acct.halted) {
+      const pos = acct.position;
+      const i = idx[pos.coin].get(T);
+      if (i !== undefined) {
+        const k = series[pos.coin][i];
+        const o = pendingAdd.order;
+        const fill = slippedPrice(k.o, isBuy(o.side, "open"), fees.slippageBps);
+        const fee = feeCost(o.qty * fill, fees.takerFeeBps);
+        const sigDist = Math.abs(o.refPrice - pendingAdd.stop);
+        const unitStop = pos.side === "long" ? fill - sigDist : fill + sigDist;
+        const newQty = pos.qty + o.qty;
+        pos.entryPrice = (pos.entryPrice * pos.qty + fill * o.qty) / newQty;
+        pos.qty = newQty;
+        pos.margin += (o.qty * fill) / pos.leverage;
+        pos.fees += fee;
+        pos.units += 1;
+        pos.lastFillPrice = fill;
+        // stop for the whole position: tighter of the current stop and the new unit's stop, inside the hard stop for the averaged entry
+        const cand = guard.finalStop(pos.coin, pos.side, pos.entryPrice, unitStop, pos.leverage);
+        pos.stopPrice = pos.side === "long" ? Math.max(pos.stopPrice, cand) : Math.min(pos.stopPrice, cand);
+        pos.reasonEntry = pos.reasonEntry.replace(/ \+\d+ units?$/, "") + ` +${pos.units - 1} unit${pos.units > 2 ? "s" : ""}`;
+      }
+      pendingAdd = null;
     }
 
     // ---- fill pending entry at this candle's open (signal came from previous close) ----
@@ -257,9 +295,13 @@ export function runBacktest(input: BacktestInput, label = "backtest"): BacktestR
   return {
     label, params, risk, fees, from: times[0] ?? 0, to: times[times.length - 1] ?? 0, startEquity: input.startEquity,
     metrics, metricsNoFees, trades, equityCurve: thin(equityCurve, 3000), equityCurveNoFees: curveNoFees, haltedAt, haltReason, dailyHalts,
+    mc: noFees === null && costless ? monteCarlo(trades, input.startEquity) : monteCarlo(trades, input.startEquity),
   };
 }
 
+function unrealizedOf(pos: Position, mark: number): number {
+  return grossPnl(pos.side, pos.entryPrice, mark, pos.qty) - pos.fees + pos.funding;
+}
 function makeCtx(coin: string, s: Candle[], i: number, context: Candle[], W: number, WC: number, cms: number, Tc: number, params: StrategyParams): StrategyContext {
   const candles = s.slice(Math.max(0, i - W + 1), i + 1);
   const ctxAll = contextUpTo(context, cms, Tc);
@@ -342,6 +384,9 @@ export function formatReport(r: BacktestResult): string {
     row("avg hold (h)", f2(m.avgHoldHours), ""),
     `exits: ${Object.entries(m.exitReasons).map(([k, v]) => `${k}=${v}`).join(", ")}`,
   ];
+  const units = r.trades.reduce((a, t) => a + (t.units ?? 1), 0);
+  if (units > r.trades.length) lines.push(`pyramiding: ${units} units over ${r.trades.length} positions (avg ${(units / r.trades.length).toFixed(2)})`);
+  if (r.mc) lines.push(`monte carlo (${r.mc.paths} resampled paths): final multiple p5 ${r.mc.p5.toFixed(2)}x · p25 ${r.mc.p25.toFixed(2)}x · median ${r.mc.p50.toFixed(2)}x · p75 ${r.mc.p75.toFixed(2)}x · p95 ${r.mc.p95.toFixed(2)}x | P(loss) ${(r.mc.pLoss * 100).toFixed(0)}% · P(DD>50%) ${(r.mc.pDd50 * 100).toFixed(0)}% · P(ruin DD>90%) ${(r.mc.pDd90 * 100).toFixed(0)}% · median max DD ${(r.mc.medianMaxDd * 100).toFixed(0)}%`);
   if (r.haltedAt) lines.push(`KILL SWITCH at ${new Date(r.haltedAt).toISOString()}: ${r.haltReason}`);
   if (r.dailyHalts) lines.push(`daily-loss halts: ${r.dailyHalts} (auto-resumed next UTC day in backtest; the live bot stays halted until manual reset)`);
   return lines.join("\n");

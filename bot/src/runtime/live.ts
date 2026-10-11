@@ -112,6 +112,28 @@ export class LiveExecutor implements Executor {
     return oid;
   }
 
+  /** Pyramiding: one more unit at market (IOC, not reduce-only). Leverage was set at entry. */
+  async addUnit(order: ApprovedOrder, mark: number): Promise<Fill> {
+    const spec = this.spec(order.coin);
+    const [st] = await this.place([buildEntryOrder(spec, order.side, order.qty, mark)]);
+    if (!isObj(st) || !("filled" in st)) {
+      if (isObj(st) && "resting" in st) await this.exchange.cancel({ cancels: [{ a: spec.assetIndex, o: st.resting.oid }] }).catch(() => {});
+      throw new Error(`add not filled: ${JSON.stringify(st)}`);
+    }
+    const qty = Number(st.filled.totalSz), price = Number(st.filled.avgPx);
+    return { price, qty, fee: feeCost(qty * price, this.cfg.fees.takerFeeBps), time: Date.now() };
+  }
+
+  /** Place stop (+TP) for the position's total size, then cancel the previous protective orders. */
+  async reprotect(pos: Position): Promise<number | null> {
+    const spec = this.spec(pos.coin);
+    const before = (await this.info.openOrders(this.address)).filter((o) => o.coin === pos.coin).map((o) => o.oid);
+    const oid = await this.placeProtection(spec, pos.side, pos.qty, pos.stopPrice, pos.tpPrice);
+    const stale = before.filter((o) => o !== oid);
+    if (stale.length) await this.exchange.cancel({ cancels: stale.map((o) => ({ a: spec.assetIndex, o })) }).catch((e) => this.log(`warn: cancel stale protection failed: ${(e as Error).message}`));
+    return oid;
+  }
+
   /** Close the whole position; the stop is cancelled only after the exchange shows it flat. */
   async close(pos: Position, mark: number, _reason: string): Promise<Fill> {
     const spec = this.spec(pos.coin);

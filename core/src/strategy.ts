@@ -45,7 +45,45 @@ function trendAllows(ctx: StrategyContext, side: "long" | "short"): boolean {
 export function evaluateEntry(ctx: StrategyContext): EntrySignal | null {
   const p = ctx.params;
   if (ctx.candles.length < requiredCandles(p)) return null;
+  if (p.name === "apex") return evaluateApex(ctx);
   return p.name === "donchian" ? evaluateDonchian(ctx) : evaluateReclaim(ctx);
+}
+
+/** Kaufman efficiency ratio of the last n closes: 1 = straight line, 0 = pure noise. */
+export function efficiencyRatio(candles: Candle[], n: number): number {
+  const i = candles.length - 1;
+  if (i < n) return 0;
+  const net = Math.abs(candles[i].c - candles[i - n].c);
+  let path = 0;
+  for (let k = i - n + 1; k <= i; k++) path += Math.abs(candles[k].c - candles[k - 1].c);
+  return path > 0 ? net / path : 0;
+}
+
+/**
+ * APEX: primary-interval channel breakout taken only in the direction of the context trend and only when the
+ * context market is trending (efficiency ratio). No fixed target: the position is trailed (and pyramided) by manage().
+ */
+export function evaluateApex(ctx: StrategyContext): EntrySignal | null {
+  const { candles, params: p, coin, context } = ctx;
+  const i = candles.length - 1;
+  const cur = candles[i];
+  const a = atr(candles, p.atrN)[i];
+  if (!(a > 0)) return null;
+  if (p.regimeErMin > 0 && efficiencyRatio(context, p.regimeErN) < p.regimeErMin) return null;
+  const vr = volumeRatio(candles, i, p.volumeAvgN);
+  if (p.volumeMult > 0 && !(vr > p.volumeMult)) return null;
+  const H = highestHigh(candles, i - p.lookback, i - 1);
+  const L = lowestLow(candles, i - p.lookback, i - 1);
+  const stopDist = p.stopAtrMult * a;
+  if (p.allowLong && cur.c > H && candles[i - 1].c <= H && cur.c - H <= p.maxChaseAtr * a && trendAllows(ctx, "long")) {
+    return { coin, side: "long", refPrice: cur.c, stopPrice: cur.c - stopDist, tpPrice: p.rMultiple > 0 ? cur.c + p.rMultiple * stopDist : null, atr: a, level: H, volumeRatio: vr, t: cur.t,
+      reason: `apex long: ${p.lookback}-bar breakout ${fmt(cur.c)} > ${fmt(H)} with trend, ER ${efficiencyRatio(context, p.regimeErN).toFixed(2)}` };
+  }
+  if (p.allowShort && cur.c < L && candles[i - 1].c >= L && L - cur.c <= p.maxChaseAtr * a && trendAllows(ctx, "short")) {
+    return { coin, side: "short", refPrice: cur.c, stopPrice: cur.c + stopDist, tpPrice: p.rMultiple > 0 ? cur.c - p.rMultiple * stopDist : null, atr: a, level: L, volumeRatio: vr, t: cur.t,
+      reason: `apex short: ${p.lookback}-bar breakdown ${fmt(cur.c)} < ${fmt(L)} with trend, ER ${efficiencyRatio(context, p.regimeErN).toFixed(2)}` };
+  }
+  return null;
 }
 
 function volumeRatio(candles: Candle[], i: number, n: number): number {
@@ -168,7 +206,15 @@ export function manage(ctx: StrategyContext, pos: Position): ManageAction | null
       if (tighter) action.newStop = cand;
     }
   }
-  return action.newStop !== undefined ? action : null;
+  // pyramiding: add a unit once price has moved addEveryAtr ATR beyond the last fill (trend still intact)
+  if (p.maxUnits > 1 && pos.units < p.maxUnits && a > 0) {
+    const moved = pos.side === "long" ? cur.c - pos.lastFillPrice : pos.lastFillPrice - cur.c;
+    if (moved >= p.addEveryAtr * a && trendAllows(ctx, pos.side)) {
+      const stopDist = p.stopAtrMult * a;
+      action.addUnit = { refPrice: cur.c, stopPrice: pos.side === "long" ? cur.c - stopDist : cur.c + stopDist, atr: a };
+    }
+  }
+  return action.newStop !== undefined || action.addUnit ? action : null;
 }
 
 /** Context candles closed at or before `closeTime` (no lookahead). */

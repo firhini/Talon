@@ -1,6 +1,6 @@
 import { HARD_MAX_LEVERAGE } from "./config.js";
 import { clampStop, hardStopPrice, roundPrice, roundSize } from "./fees.js";
-import type { AccountState, ApprovedOrder, AssetSpec, OrderIntent, RiskConfig, Side } from "./types.js";
+import type { AccountState, ApprovedOrder, AssetSpec, OrderIntent, Position, RiskConfig, Side } from "./types.js";
 
 export type RiskDecision = { ok: true; order: ApprovedOrder } | { ok: false; reason: string };
 
@@ -33,10 +33,15 @@ export class RiskGuard {
     return null;
   }
 
-  /** Effective leverage for a coin: min of configured, hard ceiling and exchange max. */
-  effectiveLeverage(coin: string, requested: number): number {
+  /**
+   * Effective leverage for a coin: min of configured, hard ceiling and exchange max.
+   * With dynamicLeverage and a known stop distance, the smallest leverage that still keeps the structural stop
+   * inside the hard ROE stop is chosen (never more than the caps), so the stop is always hit before liquidation.
+   */
+  effectiveLeverage(coin: string, requested: number, stopFrac?: number): number {
     const spec = this.specs.get(coin);
-    const lev = Math.min(requested, this.cfg.leverage, this.cfg.maxLeverage, HARD_MAX_LEVERAGE, spec?.maxLeverage ?? HARD_MAX_LEVERAGE);
+    let lev = Math.min(requested, this.cfg.leverage, this.cfg.maxLeverage, HARD_MAX_LEVERAGE, spec?.maxLeverage ?? HARD_MAX_LEVERAGE);
+    if (this.cfg.dynamicLeverage && stopFrac !== undefined && stopFrac > 0) lev = Math.min(lev, (this.cfg.hardStopRoe * 0.9) / stopFrac);
     return Math.max(1, Math.floor(lev));
   }
 
@@ -61,15 +66,15 @@ export class RiskGuard {
     if (intent.side === "long" ? intent.stopPrice >= intent.refPrice : intent.stopPrice <= intent.refPrice)
       return { ok: false, reason: "stop on wrong side of entry" };
 
-    const leverage = this.effectiveLeverage(intent.coin, intent.leverage);
+    const stopFrac = Math.abs(intent.refPrice - intent.stopPrice) / intent.refPrice;
+    const leverage = this.effectiveLeverage(intent.coin, intent.leverage, stopFrac);
     const sizingEquity = this.cfg.compound ? acct.equity : Math.min(this.cfg.baseEquity, acct.equity);
     let margin = sizingEquity * this.cfg.sizeFraction;
     margin = Math.min(margin, acct.equity * 0.95);
     let notionalWanted = margin * leverage;
-    if (this.cfg.riskPerTradePct > 0) {
+    if (this.cfg.riskPerTradePct > 0 && stopFrac > 0) {
       // volatility-normalised cap: lose at most riskPerTradePct of equity if the structural stop is hit
-      const stopFrac = Math.abs(intent.refPrice - intent.stopPrice) / intent.refPrice;
-      if (stopFrac > 0) notionalWanted = Math.min(notionalWanted, (sizingEquity * this.cfg.riskPerTradePct) / stopFrac);
+      notionalWanted = Math.min(notionalWanted, (sizingEquity * this.cfg.riskPerTradePct) / stopFrac);
     }
     const qty = roundSize(notionalWanted / intent.refPrice, spec.szDecimals);
     const notional = qty * intent.refPrice;
@@ -90,6 +95,29 @@ export class RiskGuard {
     };
     return { ok: true, order };
   }
+}
+
+/** Pyramiding: approve one more unit for an existing position (same coin and side, same leverage, total margin capped). */
+export function approveAdd(guard: RiskGuard, pos: Position, refPrice: number, stopPrice: number, acct: AccountState, reason: string): RiskDecision {
+  const spec = guard.spec(pos.coin);
+  if (!spec) return { ok: false, reason: `unknown asset ${pos.coin}` };
+  const halt = guard.checkHalt(acct);
+  if (halt) return { ok: false, reason: `halted: ${halt}` };
+  if (!(refPrice > 0) || !Number.isFinite(stopPrice) || (pos.side === "long" ? stopPrice >= refPrice : stopPrice <= refPrice)) return { ok: false, reason: "add: stop on wrong side" };
+  const cfg = guard.cfg;
+  const stopFrac = Math.abs(refPrice - stopPrice) / refPrice;
+  const sizingEquity = cfg.compound ? acct.equity : Math.min(cfg.baseEquity, acct.equity);
+  const budget = Math.min(sizingEquity * cfg.sizeFraction, acct.equity * 0.95) - pos.margin; // remaining margin budget
+  if (budget <= 0) return { ok: false, reason: "add: margin budget exhausted" };
+  let notionalWanted = budget * pos.leverage;
+  if (cfg.riskPerTradePct > 0 && stopFrac > 0) notionalWanted = Math.min(notionalWanted, (sizingEquity * cfg.riskPerTradePct) / stopFrac);
+  // the new unit must survive the position's fixed leverage: its stop has to sit inside the hard ROE stop
+  if (stopFrac > (cfg.hardStopRoe * 0.95) / pos.leverage) return { ok: false, reason: "add: stop outside hard ROE stop at current leverage" };
+  const qty = roundSize(notionalWanted / refPrice, spec.szDecimals);
+  const notional = qty * refPrice;
+  if (qty <= 0 || notional < cfg.minNotionalUsd) return { ok: false, reason: `add too small: ${notional.toFixed(2)}` };
+  const stop = roundPrice(stopPrice, spec.szDecimals);
+  return { ok: true, order: { __approved: true, coin: pos.coin, side: pos.side, qty, notional, margin: notional / pos.leverage, leverage: pos.leverage, stopPrice: stop, tpPrice: pos.tpPrice, refPrice, reason } };
 }
 
 /** Start-of-day / peak bookkeeping shared by paper, live and backtest. */

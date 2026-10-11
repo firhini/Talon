@@ -16,6 +16,10 @@ export interface Executor {
   open(order: ApprovedOrder, mark: number, protect: (fillPx: number) => { stop: number; tp: number | null }): Promise<{ fill: Fill; stopOrderId: number | null; stop: number; tp: number | null }>;
   /** replace the protective stop (and keep TP) */
   updateStop(pos: Position, newStop: number): Promise<number | null>;
+  /** pyramiding: buy/sell one more unit at market in the position's direction (protection is re-placed by reprotect) */
+  addUnit(order: ApprovedOrder, mark: number): Promise<Fill>;
+  /** re-place stop (and TP) for the position's current total size, then cancel the previous protective orders */
+  reprotect(pos: Position): Promise<number | null>;
   close(pos: Position, mark: number, reason: string): Promise<Fill>;
   /** flatten everything, cancel all orders (kill switch) */
   flattenAll(reason: string): Promise<void>;

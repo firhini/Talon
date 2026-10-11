@@ -1,5 +1,5 @@
 import {
-  contextUpTo, evaluateEntry, formatScanTable, grossPnl, INTERVAL_MS, insertTrade, loadPosition, logEvent, manage, recordEquity, requiredCandles, requiredContext,
+  approveAdd, contextUpTo, evaluateEntry, formatScanTable, grossPnl, INTERVAL_MS, insertTrade, loadPosition, logEvent, manage, recordEquity, requiredCandles, requiredContext,
   rollAccountDay, roe as roeOf, saveBotState, savePosition, saveScan, scanCoin, takeCommand, type AccountState, type AppConfig, type AssetSpec, type Candle,
   type DB, type EntrySignal, type HyperliquidInfo, type Position, type RiskGuard, type ScanRow, type StrategyContext, type Trade,
 } from "@talon/core";
@@ -179,15 +179,18 @@ export class Engine {
       pos.bestPrice = pos.side === "long" ? Math.max(pos.bestPrice, k.h) : Math.min(pos.bestPrice, k.l);
       const act = manage(this.ctx(pos.coin), pos);
       if (act?.exit) await this.closePosition(this.mark(pos.coin), act.exit.reason);
-      else if (act?.newStop !== undefined) {
-        const ns = this.guard.finalStop(pos.coin, pos.side, pos.entryPrice, act.newStop, pos.leverage);
-        const tighter = pos.side === "long" ? ns > pos.stopPrice : ns < pos.stopPrice;
-        if (tighter) {
-          const oid = await this.exec.updateStop(pos, ns);
-          pos.stopPrice = ns; if (oid) pos.stopOrderId = oid;
-          this.log(`${pos.coin} trailing stop → ${ns}`);
-          logEvent(this.db, this.mode, "info", `${pos.coin} trailing stop moved to ${ns}`);
+      else if (act) {
+        if (act.newStop !== undefined) {
+          const ns = this.guard.finalStop(pos.coin, pos.side, pos.entryPrice, act.newStop, pos.leverage);
+          const tighter = pos.side === "long" ? ns > pos.stopPrice : ns < pos.stopPrice;
+          if (tighter) {
+            const oid = await this.exec.updateStop(pos, ns);
+            pos.stopPrice = ns; if (oid) pos.stopOrderId = oid;
+            this.log(`${pos.coin} trailing stop → ${ns}`);
+            logEvent(this.db, this.mode, "info", `${pos.coin} trailing stop moved to ${ns}`);
+          }
         }
+        if (act.addUnit && this.status === "running" && !this.acct.halted) await this.addUnit(pos, act.addUnit);
       }
     }
     if (this.status !== "running" || this.acct.position || this.acct.halted) return;
@@ -226,6 +229,38 @@ export class Engine {
     }
   }
 
+  /** Pyramiding: one more unit, then the stop order is re-placed for the whole position. */
+  private async addUnit(pos: Position, add: { refPrice: number; stopPrice: number; atr: number }): Promise<void> {
+    const mark = this.mark(pos.coin);
+    if (!(mark > 0)) return;
+    const d = approveAdd(this.guard, pos, mark, pos.side === "long" ? mark - Math.abs(add.refPrice - add.stopPrice) : mark + Math.abs(add.refPrice - add.stopPrice), this.acct, "pyramid add");
+    if (!d.ok) { this.log(`add rejected: ${d.reason}`); return; }
+    try {
+      const fill = await this.exec.addUnit(d.order, mark);
+      const sigDist = Math.abs(add.refPrice - add.stopPrice);
+      const unitStop = pos.side === "long" ? fill.price - sigDist : fill.price + sigDist;
+      const newQty = pos.qty + fill.qty;
+      pos.entryPrice = (pos.entryPrice * pos.qty + fill.price * fill.qty) / newQty;
+      pos.qty = newQty;
+      pos.margin += (fill.qty * fill.price) / pos.leverage;
+      pos.fees += fill.fee;
+      pos.units += 1;
+      pos.lastFillPrice = fill.price;
+      pos.atr = add.atr;
+      const cand = this.guard.finalStop(pos.coin, pos.side, pos.entryPrice, unitStop, pos.leverage);
+      pos.stopPrice = pos.side === "long" ? Math.max(pos.stopPrice, cand) : Math.min(pos.stopPrice, cand);
+      pos.reasonEntry = pos.reasonEntry.replace(/ \+\d+ units?$/, "") + ` +${pos.units - 1} unit${pos.units > 2 ? "s" : ""}`;
+      const oid = await this.exec.reprotect(pos);
+      if (oid) pos.stopOrderId = oid;
+      this.log(`ADD ${pos.coin} ${pos.side} unit ${pos.units}: +${fill.qty} @ ${fill.price} → qty ${pos.qty} avg ${pos.entryPrice.toFixed(4)} stop ${pos.stopPrice}`);
+      logEvent(this.db, this.mode, "trade", `ADD ${pos.coin} ${pos.side} unit ${pos.units} +${fill.qty} @ ${fill.price} (stop ${pos.stopPrice})`);
+      savePosition(this.db, this.mode, pos);
+    } catch (e) {
+      this.log(`add failed: ${(e as Error).message}`);
+      logEvent(this.db, this.mode, "error", `pyramid add failed: ${(e as Error).message}`);
+    }
+  }
+
   // ---------------- position lifecycle ----------------
   private async closePosition(price: number, reason: string, fillOverride?: { price: number; qty: number; fee: number; time: number }): Promise<void> {
     const pos = this.acct.position;
@@ -252,7 +287,7 @@ export class Engine {
     const tr: Trade = {
       mode: this.mode, runId: this.runId, coin: pos.coin, side: pos.side, leverage: pos.leverage, qty: fill.qty, entryPrice: pos.entryPrice, entryTime: pos.entryTime,
       exitPrice: fill.price, exitTime: fill.time, stopPrice: pos.initialStop, tpPrice: pos.tpPrice, grossPnl: gross, fees, funding: pos.funding, pnl: net, roe: roeOf(net, pos.margin),
-      reasonEntry: pos.reasonEntry, reasonExit: reason,
+      reasonEntry: pos.reasonEntry, reasonExit: reason, units: pos.units, equityBefore: pos.equityBefore,
     };
     insertTrade(this.db, tr);
     this.log(`EXIT ${pos.coin} ${pos.side} @ ${fill.price} pnl ${net.toFixed(2)} (roe ${(tr.roe * 100).toFixed(1)}%) fees ${fees.toFixed(2)} funding ${pos.funding.toFixed(2)} | ${reason}`);
@@ -346,6 +381,9 @@ export class Engine {
         dailyLossLimitPct: this.cfg.risk.dailyLossLimitPct, maxDrawdownPct: this.cfg.risk.maxDrawdownPct, hardStopRoe: this.cfg.risk.hardStopRoe, mids: this.mids,
         cash: this.exec instanceof PaperExecutor ? this.exec.cash : null, lastCandle: this.lastCandleT, testnet: this.cfg.live.testnet,
         baseEquity: this.guard.cfg.baseEquity, lastStatus: this.status, flattenPending: this.flattenPending,
+        preset: process.env.STRATEGY_PRESET ?? null, maxUnits: this.cfg.strategy.maxUnits,
+        nextAdd: pos && this.cfg.strategy.maxUnits > 1 && pos.units < this.cfg.strategy.maxUnits && pos.atr > 0
+          ? (pos.side === "long" ? pos.lastFillPrice + this.cfg.strategy.addEveryAtr * pos.atr : pos.lastFillPrice - this.cfg.strategy.addEveryAtr * pos.atr) : null,
       },
     });
     if (pos) savePosition(this.db, this.mode, pos);

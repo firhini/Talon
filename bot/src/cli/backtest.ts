@@ -2,10 +2,16 @@ import {
   computeMetrics, formatReport, loadCandles, loadConfig, loadFunding, openDb, runBacktest, saveBacktest,
   type AssetSpec, type BacktestInput, type BacktestResult, type Interval, type Metrics, type StrategyParams, type Trade,
 } from "@talon/core";
+import { PRESETS, type PresetId } from "@talon/core";
 import { arg, flag, loadEnv, parseDate } from "../env.js";
 
 loadEnv();
-const cfg = loadConfig({ ...process.env, MODE: "backtest" });
+const presetId = arg("preset");
+const presetEnv = presetId ? PRESETS[presetId as PresetId]?.env : undefined;
+if (presetId && !presetEnv) { console.error(`unknown preset ${presetId}; known: ${Object.keys(PRESETS).join(", ")}`); process.exit(1); }
+// precedence: process.env (.env) < preset < --set KEY=VAL,KEY=VAL
+const setOverrides = Object.fromEntries((arg("set", "") as string).split(",").filter((kv) => kv.includes("=")).map((kv) => kv.split("=") as [string, string]));
+const cfg = loadConfig({ ...process.env, ...(presetEnv ?? {}), ...setOverrides, MODE: "backtest" });
 const db = openDb(arg("db", cfg.dbPath)!);
 const source = arg("source", "okx")!;
 const from = parseDate(arg("from"), 0);
@@ -89,7 +95,7 @@ if (flag("sweep")) {
   };
   for (const g of grid) {
     const p = { ...cfg.strategy, ...g.params };
-    const label = `${p.name}-${g.interval}-lb${p.lookback}-${p.trendFilter}-s${p.stopAtrMult}-R${p.rMultiple}-tr${p.trailAtrMult}-v${p.volumeMult}`;
+    const label = `${p.name}-${g.interval}-lb${p.lookback}-${p.trendFilter}-s${p.stopAtrMult}-R${p.rMultiple}-tr${p.trailAtrMult}-v${p.volumeMult}` + (p.name === "apex" ? `-er${p.regimeErMin}-u${p.maxUnits}-risk${cfg.risk.riskPerTradePct}` : "");
     if (only && !label.includes(only)) continue;
     const r = run(p, g.interval, label, { killSwitch: "off" });
     const is = validateFrom ? subset(r.trades.filter((t) => t.entryTime < validateFrom)) : r.metrics;
@@ -98,15 +104,18 @@ if (flag("sweep")) {
     i++;
     if (i % 10 === 0) console.error(`  ${i}/${grid.length} (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   }
-  rows.sort((a, b) => score(b.is) - score(a.is));
+  const rankMc = arg("rank") === "mc";
+  const mcScore = (r: BacktestResult) => (r.mc ? Math.log(Math.max(r.mc.p50, 1e-6)) - 2 * r.mc.pDd90 - 0.5 * r.mc.pLoss : -1e9);
+  rows.sort((a, b) => (rankMc ? mcScore(b.r) - mcScore(a.r) : score(b.is) - score(a.is)));
   const fmt = (m: Metrics) => `${String(m.trades).padStart(5)} ${(m.winRate * 100).toFixed(0).padStart(4)} ${m.expectancyR.toFixed(2).padStart(6)} ${(Number.isFinite(m.profitFactor) ? Math.min(m.profitFactor, 99) : 99).toFixed(2).padStart(5)} ${(m.maxDrawdownPct * 100).toFixed(1).padStart(5)} ${(m.totalReturnPct * 100).toFixed(1).padStart(7)}`;
-  console.log("label".padEnd(50) + "|  IS: n  win%  expR    PF   DD%    ret% |" + (validateFrom ? " OOS: n  win%  expR    PF   DD%    ret% |" : "") + " noFee%");
+  console.log("label".padEnd(50) + "|  IS: n  win%  expR    PF   DD%    ret% |" + (validateFrom ? " OOS: n  win%  expR    PF   DD%    ret% |" : "") + " noFee% | MC p50   p5   p95 ruin% loss%");
   for (const { label, r, is, oos } of rows) {
-    console.log(`${label.padEnd(50)}| ${fmt(is)} |${oos ? ` ${fmt(oos)} |` : ""} ${(r.metricsNoFees.totalReturnPct * 100).toFixed(1).padStart(6)}`);
+    const mc = r.mc ? `${r.mc.p50.toFixed(2).padStart(6)} ${r.mc.p5.toFixed(2).padStart(5)} ${r.mc.p95.toFixed(1).padStart(6)} ${(r.mc.pDd90 * 100).toFixed(0).padStart(4)} ${(r.mc.pLoss * 100).toFixed(0).padStart(4)}` : "";
+    console.log(`${label.padEnd(50)}| ${fmt(is)} |${oos ? ` ${fmt(oos)} |` : ""} ${(r.metricsNoFees.totalReturnPct * 100).toFixed(1).padStart(6)} | ${mc}`);
   }
   if (flag("save")) for (const { label, r } of rows.slice(0, 10)) saveBacktest(db, `sweep:${label}`, { ...r.params, interval: label.split("-")[1], contextInterval: CONTEXT_OF[label.split("-")[1] as Interval], risk: r.risk, fees: r.fees, startEquity, coins }, { ...r.metrics, noFees: r.metricsNoFees, from: r.from, to: r.to, haltedAt: r.haltedAt, haltReason: r.haltReason }, r.equityCurve, r.trades);
 } else {
-  const label = arg("label", `${cfg.strategy.name}-${interval}`)!;
+  const label = arg("label", presetId ? PRESETS[presetId as PresetId].backtestLabel : `${cfg.strategy.name}-${interval}`)!;
   const r = run(cfg.strategy, interval, label, { killSwitch: (arg("kill", "halt") as "halt" | "off") });
   console.log(formatReport(r));
   if (flag("trades")) for (const t of r.trades) console.log(`${new Date(t.entryTime).toISOString().slice(0, 16)} ${t.coin.padEnd(4)} ${t.side.padEnd(5)} ${t.leverage}x in ${t.entryPrice.toFixed(2)} out ${t.exitPrice.toFixed(2)} roe ${(t.roe * 100).toFixed(1).padStart(6)}% pnl ${t.pnl.toFixed(2).padStart(8)} fees ${t.fees.toFixed(2)} fund ${t.funding.toFixed(2)} | ${t.reasonExit}`);
@@ -124,8 +133,8 @@ if (flag("sweep")) {
     for (const [k, e] of agg((t) => t.side)) console.log(`  ${k.padEnd(5)} n=${String(e.n).padStart(4)} win=${((e.wins / e.n) * 100).toFixed(0).padStart(3)}% pnl=${e.pnl.toFixed(2).padStart(9)}`);
   }
   if (flag("save") || !flag("nosave")) {
-    const id = saveBacktest(db, label, { ...r.params, interval, contextInterval: CONTEXT_OF[interval], risk: r.risk, fees: r.fees, startEquity, coins },
-      { ...r.metrics, noFees: r.metricsNoFees, from: r.from, to: r.to, haltedAt: r.haltedAt, haltReason: r.haltReason, dailyHalts: r.dailyHalts }, r.equityCurve, r.trades);
+    const id = saveBacktest(db, label, { ...r.params, interval, contextInterval: CONTEXT_OF[interval], risk: r.risk, fees: r.fees, startEquity, coins, preset: presetId ?? null },
+      { ...r.metrics, noFees: r.metricsNoFees, from: r.from, to: r.to, haltedAt: r.haltedAt, haltReason: r.haltReason, dailyHalts: r.dailyHalts, mc: r.mc }, r.equityCurve, r.trades);
     console.log(`saved backtest #${id}`);
   }
 }

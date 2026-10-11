@@ -147,3 +147,37 @@ describe("contextUpTo has no lookahead", () => {
     expect(contextUpTo(ctx, 3_600_000, 10 * 3_600_000).length).toBe(4);
   });
 });
+
+describe("apex strategy + pyramiding", () => {
+  const A = { ...P, name: "apex" as const, volumeMult: 0, stopAtrMult: 2, rMultiple: 0, trailAtrMult: 3, trailAfterR: 0, trendFilter: "ema" as const, regimeErMin: 0.3, regimeErN: 10, maxUnits: 4, addEveryAtr: 1 };
+  const up: Candle[] = [];
+  for (let i = 0; i < 300; i++) { const px = 100 + i * 0.3; up.push({ t: i * 3_600_000, o: px, h: px + 0.1, l: px - 0.1, c: px, v: 1 }); }
+  const chop: Candle[] = up.map((k, i) => ({ ...k, c: 150 + (i % 2 ? 1 : -1), o: 150, h: 151.2, l: 148.8 }));
+  function breakout(): Candle[] {
+    const c = baseCandles(requiredCandles(A) + 10);
+    const last = c[c.length - 1];
+    const H = Math.max(...c.map((k) => k.h));
+    c.push(candle(last, 100, H + 0.6, 99.9, H + 0.4, 100));
+    return c;
+  }
+  it("enters a breakout only with the context trend and a trending regime", () => {
+    const s = evaluateEntry(ctxOf(breakout(), A, up));
+    expect(s?.side).toBe("long");
+    expect(s!.tpPrice).toBeNull();
+    expect(s!.refPrice - s!.stopPrice).toBeCloseTo(2 * s!.atr, 8);
+    expect(evaluateEntry(ctxOf(breakout(), A, chop))).toBeNull(); // efficiency ratio ~0 → no trade
+    const down = up.map((k, i) => ({ ...k, o: 200 - i * 0.3, h: 200 - i * 0.3 + 0.1, l: 200 - i * 0.3 - 0.1, c: 200 - i * 0.3 }));
+    expect(evaluateEntry(ctxOf(breakout(), A, down))).toBeNull(); // long breakout against a downtrend
+  });
+  it("requests a pyramid add after addEveryAtr of favourable movement, up to maxUnits", () => {
+    const c = baseCandles(requiredCandles(A) + 5);
+    const last = c[c.length - 1];
+    c.push(candle(last, 100, 103.5, 99.9, 103, 100)); // big move up
+    const pos: Position = { coin: "TEST", side: "long", qty: 1, entryPrice: 100, entryTime: 0, leverage: 20, margin: 5, stopPrice: 98, tpPrice: null, initialStop: 98, atr: 1, bestPrice: 100, barsHeld: 1, reasonEntry: "", funding: 0, fees: 0, units: 1, lastFillPrice: 100, equityBefore: 1000 };
+    const act = manage(ctxOf(c, A, up), pos);
+    expect(act?.addUnit).toBeDefined();
+    expect(act!.addUnit!.stopPrice).toBeLessThan(act!.addUnit!.refPrice);
+    expect(manage(ctxOf(c, A, up), { ...pos, units: 4 })?.addUnit).toBeUndefined();
+    expect(manage(ctxOf(c, A, up), { ...pos, lastFillPrice: 102.8 })?.addUnit).toBeUndefined(); // not enough movement since last fill
+  });
+});

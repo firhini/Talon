@@ -28,6 +28,13 @@ export class PaperExecutor implements Executor {
 
   async updateStop(_pos: Position, _newStop: number): Promise<number | null> { return null; }
 
+  async addUnit(order: ApprovedOrder, mark: number): Promise<Fill> {
+    if (!(mark > 0)) throw new Error(`no quote for ${order.coin}`);
+    const price = slippedPrice(mark, isBuy(order.side, "open"), this.fees.slippageBps);
+    return { price, qty: order.qty, fee: feeCost(order.qty * price, this.fees.takerFeeBps), time: Date.now() };
+  }
+  async reprotect(_pos: Position): Promise<number | null> { return null; }
+
   /** Close at `mark` (stop/tp price or current mid) with slippage. */
   async close(pos: Position, mark: number, _reason: string): Promise<Fill> {
     if (!(mark > 0)) throw new Error(`no quote for ${pos.coin}; cannot price the close`);
