@@ -8,6 +8,14 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+if not exist "scripts\launch.mjs" (
+  echo [talon] scripts\launch.mjs is missing next to this file.
+  echo [talon] The download is incomplete: re-download the ZIP from https://github.com/firhini/Talon
+  echo [talon] ^(green "Code" button -^> "Download ZIP"^), right-click it -^> "Extract All", then run talon.bat
+  echo [talon] from the extracted folder that contains bot, core, scripts and web.
+  pause
+  exit /b 1
+)
 node scripts\launch.mjs %*
 if errorlevel 1 (
   echo.

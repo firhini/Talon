@@ -6,6 +6,7 @@ if ! command -v node >/dev/null 2>&1; then
   read -r -p "Press Enter to close…" _
   exit 1
 fi
+[ -f scripts/launch.mjs ] || { echo "[talon] scripts/launch.mjs is missing: re-download the ZIP from https://github.com/firhini/Talon and extract everything"; exit 1; }
 node scripts/launch.mjs "$@"
 status=$?
 if [ $status -ne 0 ]; then
