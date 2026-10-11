@@ -1,21 +1,25 @@
 import Link from "next/link";
-import { listBacktests } from "@talon/core";
-import { Nav } from "@/components/Header";
+import { listBacktests, loadBotState } from "@talon/core";
+import { ModeBadge, Nav } from "@/components/Header";
 import { Panel } from "@/components/Panels";
 import { summarize } from "@/lib/backtest";
 import { getDb } from "@/lib/db";
 import { fmtNum, fmtPct, fmtRatio, fmtTime, pnlClass, fmtDate } from "@/lib/format";
 import { parseMode } from "@/lib/mode";
+import type { BotInfo } from "@/lib/state";
 
 export const dynamic = "force-dynamic";
 
 export default async function BacktestsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const mode = parseMode((await searchParams).mode);
-  const rows = listBacktests(getDb(), 100).map(summarize);
+  const db = getDb();
+  const rows = listBacktests(db, 100).map(summarize);
+  const testnet = (loadBotState(db, mode)?.info as BotInfo | null)?.testnet === true;
   return (
     <div className="mx-auto max-w-[1500px] space-y-4 px-4 py-4 pb-28 sm:px-6">
       <header className="flex flex-wrap items-center gap-4">
         <Link href={`/?mode=${mode}`} className="text-2xl font-black tracking-[0.3em] text-zinc-100">TALON</Link>
+        <ModeBadge mode={mode} testnet={testnet} big={false} />
         <span className="text-sm text-zinc-500">Backtests</span>
         <div className="ml-auto"><Nav mode={mode} active="backtests" /></div>
       </header>

@@ -29,6 +29,17 @@ export function StatusPill({ status, offline, halted }: { status: string | null;
   );
 }
 
+/** Shown when a bot in the *other* mode has a fresh heartbeat, so a live bot is never trading unseen behind a PAPER view. */
+export function OtherModeChip({ mode }: { mode: DashMode }) {
+  const other: DashMode = mode === "paper" ? "live" : "paper";
+  const cls = other === "live" ? "pulse-live bg-red-600 text-white" : "bg-amber-500 text-black";
+  return (
+    <Link href={`/?mode=${other}`} className={`rounded-md px-2 py-0.5 text-xs font-bold tracking-wider ${cls}`} title={`A bot is running in ${other} mode — click to view it`}>
+      {other.toUpperCase()} BOT RUNNING
+    </Link>
+  );
+}
+
 export function Nav({ mode, active }: { mode: DashMode; active: "dashboard" | "backtests" }) {
   const link = (href: string, label: string, key: string) => (
     <Link href={href} className={`rounded-md px-2.5 py-1 text-sm ${active === key ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:text-zinc-100"}`}>{label}</Link>

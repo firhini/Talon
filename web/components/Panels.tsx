@@ -26,10 +26,12 @@ function Tile({ label, value, sub, cls = "" }: { label: string; value: string; s
 
 export function StatTiles({ s }: { s: DashboardState }) {
   const bot: BotView | null = s.bot, info: BotInfo | null = s.info;
-  const liveEq = bot ? bot.equity + (s.position?.unrealized ?? 0) : null;
+  // bot_state.equity is already mark-to-market; realized = cash (paper, stored in info.cash) or equity minus open net PnL
+  const liveEq = bot ? bot.equity : null;
+  const realized = bot ? (typeof info?.cash === "number" ? info.cash : bot.equity - (s.position?.unrealized ?? 0)) : null;
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-      <Tile label="Equity" value={fmtUsd(liveEq)} sub={bot ? `realized ${fmtUsd(bot.equity)} · peak ${fmtUsd(bot.peakEquity)}` : "no bot state yet"} />
+      <Tile label="Equity" value={fmtUsd(liveEq)} sub={bot ? `realized ${fmtUsd(realized)} · peak ${fmtUsd(bot.peakEquity)}` : "no bot state yet"} />
       <Tile label="Today's PnL" value={fmtPnl(s.dayPnl)} sub={s.dayPnlPct !== null ? `${fmtPct(s.dayPnlPct)} vs day start ${fmtUsd(bot?.dayStartEquity)}` : undefined} cls={pnlClass(s.dayPnl)} />
       <Tile label="Drawdown from peak" value={s.drawdownPct !== null ? fmtPct(-s.drawdownPct, 2, true).replace("+", "") : "—"} sub={info?.maxDrawdownPct !== undefined ? `kill switch at -${fmtPct(info.maxDrawdownPct, 1, false)}` : undefined} cls={s.drawdownPct ? (s.drawdownPct >= (info?.maxDrawdownPct ?? 1) * 0.7 ? "text-rose-400" : "text-amber-300") : ""} />
       <Tile label="Leverage / size" value={info?.leverage !== undefined ? `${fmtNum(info.leverage, 0)}x · ${fmtPct(info.sizeFraction, 0, false)}` : "—"} sub={info?.hardStopRoe !== undefined ? `hard stop -${fmtPct(info.hardStopRoe, 0, false)} ROE` : undefined} />
@@ -43,7 +45,7 @@ export function PositionCard({ p, now, mode }: { p: PositionView | null; now: nu
   if (!p) {
     return (
       <Panel title="Open position">
-        <div className="px-4 py-8 text-center text-sm text-zinc-500">No open position<div className="mt-1 text-xs text-zinc-600">Waiting for a volume-confirmed reclaim ({mode})</div></div>
+        <div className="px-4 py-8 text-center text-sm text-zinc-500">No open position<div className="mt-1 text-xs text-zinc-600">Waiting for a breakout signal ({mode})</div></div>
       </Panel>
     );
   }

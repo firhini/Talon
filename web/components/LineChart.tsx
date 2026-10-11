@@ -27,6 +27,26 @@ function niceTicks(min: number, max: number, n = 4): number[] {
   return out;
 }
 
+const MIN = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
+const TIME_STEPS = [MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN, HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
+
+/** Ticks on round time boundaries (minutes / hours / days) with at most ~n ticks. */
+function timeTicks(min: number, max: number, n: number): number[] {
+  const span = Math.max(1, max - min);
+  const last = TIME_STEPS[TIME_STEPS.length - 1];
+  const step = TIME_STEPS.find((s) => span / s <= n) ?? last * Math.ceil(span / (last * n));
+  const out: number[] = [];
+  for (let t = Math.ceil(min / step) * step; t <= max; t += step) out.push(t);
+  return out;
+}
+
+/** Label by span: time of day for intraday sessions, date+time for a couple of weeks, date only beyond. */
+function timeLabel(span: number): (t: number) => string {
+  if (span < 2 * DAY) return (t) => fmtTime(t).slice(11);
+  if (span < 14 * DAY) return (t) => fmtTime(t).slice(5);
+  return (t) => fmtTime(t).slice(0, 10);
+}
+
 export default function LineChart({ series, height = 260, yFormat = "int", baseline, markerT, markerLabel, emptyText = "No data yet" }: Props) {
   const fmtY = yFormat === "usd" ? (v: number) => fmtUsd(v, 0) : (v: number) => v.toFixed(0);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -57,8 +77,9 @@ export default function LineChart({ series, height = 260, yFormat = "int", basel
       ? `${paths[0]}L${x(series[0].points[series[0].points.length - 1].t).toFixed(1)},${(PAD.t + ih).toFixed(1)}L${x(series[0].points[0].t).toFixed(1)},${(PAD.t + ih).toFixed(1)}Z`
       : "";
     const yt = niceTicks(vMin, vMax, 4);
-    const xt = niceTicks(tMin, tMax, Math.max(2, Math.min(6, Math.floor(iw / 140)))).filter((t) => t >= tMin && t <= tMax);
-    return { tMin, tMax, vMin, vMax, x, y, paths, area, yt, xt, iw, ih };
+    const xt = timeTicks(tMin, tMax, Math.max(2, Math.min(6, Math.floor(iw / 140))));
+    const xLabel = timeLabel(tMax - tMin);
+    return { tMin, tMax, vMin, vMax, x, y, paths, area, yt, xt, xLabel, iw, ih };
   }, [all, series, width, height, baseline]);
 
   function onMove(e: React.MouseEvent<SVGSVGElement>) {
@@ -110,7 +131,7 @@ export default function LineChart({ series, height = 260, yFormat = "int", basel
               </g>
             ))}
             {model.xt.map((t) => (
-              <text key={t} x={model.x(t)} y={height - 7} textAnchor="middle" fontSize={11} fill="#8b8b95">{fmtTime(t).slice(0, 10)}</text>
+              <text key={t} x={model.x(t)} y={height - 7} textAnchor="middle" fontSize={11} fill="#8b8b95">{model.xLabel(t)}</text>
             ))}
             {baseline !== undefined && (
               <line x1={PAD.l} x2={width - PAD.r} y1={model.y(baseline)} y2={model.y(baseline)} stroke="#52525b" strokeDasharray="4 4" strokeWidth={1} />

@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Controls from "./Controls";
-import { ModeBadge, Nav, StatusPill } from "./Header";
+import { ModeBadge, Nav, OtherModeChip, StatusPill } from "./Header";
 import LineChart from "./LineChart";
 import { EventList, Panel, PositionCard, ScanTable, StatTiles, TradeTable } from "./Panels";
 import { fmtAgo, fmtTime, fmtUsd } from "@/lib/format";
@@ -37,8 +37,11 @@ export default function Dashboard({ initial }: { initial: DashboardState }) {
   }, [refresh]);
 
   const bot = s.bot;
-  const equityPts = s.equity.map((p) => ({ t: p.t, v: p.equity + p.unrealized }));
-  const startEq = s.equity[0]?.equity;
+  // equity rows are already mark-to-market; the dashed realized line strips the open net PnL
+  const equityPts = s.equity.map((p) => ({ t: p.t, v: p.equity }));
+  const realizedPts = s.equity.map((p) => ({ t: p.t, v: p.equity - p.unrealized }));
+  const startEq = s.startEquity ?? undefined;
+  const tradeLabel = s.tradeCount > s.trades.length ? `last ${s.trades.length} of ${s.tradeCount}` : `${s.tradeCount} trades`;
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-4 px-4 py-4 pb-28 sm:px-6">
@@ -53,7 +56,10 @@ export default function Dashboard({ initial }: { initial: DashboardState }) {
             {bot ? `tick ${fmtAgo(s.now - bot.lastTick)} ago` : "no heartbeat"}{err ? ` · refresh failed: ${err}` : ""}
           </span>
         </div>
-        <div className="ml-auto"><Nav mode={s.mode} active="dashboard" /></div>
+        <div className="ml-auto flex items-center gap-3">
+          {s.otherModeActive && <OtherModeChip mode={s.mode} />}
+          <Nav mode={s.mode} active="dashboard" />
+        </div>
       </header>
 
       {bot?.halted && (
@@ -67,13 +73,13 @@ export default function Dashboard({ initial }: { initial: DashboardState }) {
         </div>
       )}
 
-      <Controls mode={s.mode} halted={bot?.halted ?? false} onSent={refresh} />
+      <Controls mode={s.mode} halted={bot?.halted ?? false} pending={s.pendingCmd} onSent={refresh} />
       <StatTiles s={s} />
 
       <div className="grid gap-4 xl:grid-cols-5">
         <Panel title="Equity curve" className="xl:col-span-3" right={equityPts.length ? `${equityPts.length} points · from ${fmtTime(s.equity[0].t)} UTC` : undefined}>
           <div className="px-2 pt-3 pb-1">
-            <LineChart series={[{ name: "Equity", color: "#f0b429", points: equityPts }]} yFormat="usd" baseline={startEq} emptyText="No equity history yet" height={260} />
+            <LineChart series={[{ name: "Equity", color: "#f0b429", points: equityPts }, { name: "Realized", color: "#8b8b95", dashed: true, points: realizedPts }]} yFormat="usd" baseline={startEq} emptyText="No equity history yet" height={260} />
           </div>
         </Panel>
         <div className="xl:col-span-2"><PositionCard p={s.position} now={s.now} mode={s.mode} /></div>
@@ -82,7 +88,7 @@ export default function Dashboard({ initial }: { initial: DashboardState }) {
       <ScanTable rows={s.scan} />
 
       <div className="grid gap-4 xl:grid-cols-5">
-        <Panel title="Trade log" className="xl:col-span-3" right={`last ${s.trades.length} · total realized ${fmtUsd(s.trades.reduce((a, t) => a + t.pnl, 0))}`}>
+        <Panel title="Trade log" className="xl:col-span-3" right={`${tradeLabel} · total realized ${fmtUsd(s.realizedTotal)}`}>
           <div className="max-h-[32rem] overflow-y-auto"><TradeTable trades={s.trades} /></div>
         </Panel>
         <div className="xl:col-span-2"><EventList events={s.events} now={s.now} /></div>

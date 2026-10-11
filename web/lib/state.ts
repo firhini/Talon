@@ -1,11 +1,33 @@
 import {
-  listEvents, listTrades, loadBotState, loadEquity, loadLatestScan, loadPosition, roe, stopDistancePct, unrealizedPnl,
+  getControl, listEvents, listTrades, loadBotState, loadLatestScan, loadPosition, roe, stopDistancePct, unrealizedPnl,
   type DB, type Position, type ScanRow, type Trade,
 } from "@talon/core";
 import type { DashMode } from "./mode";
 
 /** Bot is considered offline when its last heartbeat is older than this. */
 export const OFFLINE_AFTER_MS = 90_000;
+/** Equity curve: keep every minute row for this recent window ... */
+const RECENT_FULL_RES_MS = 6 * 3_600_000;
+/** ... and one row per bucket (the bucket's last sample) before that. Integer literal in SQL: better-sqlite3 binds JS numbers as REAL. */
+const BUCKET_MS = 15 * 60_000;
+const MAX_EQUITY_POINTS = 4000; // ~38 days at 15-min buckets plus the full-res window
+
+export interface EquityPoint { t: number; equity: number; unrealized: number }
+
+/**
+ * Mark-to-market equity history for the chart: minute resolution for the last 6 h, 15-minute buckets before that,
+ * newest MAX_EQUITY_POINTS rows. The bot writes one row per minute, so an unbucketed LIMIT would be a rolling ~33 h window.
+ */
+export function loadEquityCurve(db: DB, mode: DashMode, now = Date.now()): EquityPoint[] {
+  const cut = now - RECENT_FULL_RES_MS;
+  const rows = db.prepare(`
+    SELECT t, equity, unrealized FROM equity WHERE mode=? AND t >= ?
+    UNION ALL
+    SELECT t, equity, unrealized FROM equity WHERE mode=? AND t < ?
+      AND t IN (SELECT MAX(t) FROM equity WHERE mode=? AND t < ? GROUP BY t / ${BUCKET_MS})
+    ORDER BY t DESC LIMIT ?`).all(mode, cut, mode, cut, mode, cut, MAX_EQUITY_POINTS) as EquityPoint[];
+  return rows.reverse();
+}
 
 export interface BotInfo {
   strategy?: string; interval?: string; universe?: string[]; leverage?: number; sizeFraction?: number;
@@ -37,16 +59,26 @@ export interface DashboardState {
   /** server time when the snapshot was built (ms) */
   now: number;
   offline: boolean;
+  /** a bot in the other mode (paper <-> live) has a fresh heartbeat and status running */
+  otherModeActive: boolean;
   bot: BotView | null;
   info: BotInfo | null;
   dayPnl: number | null;
   dayPnlPct: number | null;
   drawdownPct: number | null;
   position: PositionView | null;
-  equity: { t: number; equity: number; unrealized: number }[];
+  /** equity is mark-to-market (already includes unrealized); unrealized is informational */
+  equity: EquityPoint[];
+  /** earliest equity ever recorded for this mode (chart baseline); null without history */
+  startEquity: number | null;
   scan: ScanRow[];
+  /** most recent trades only (capped) — use tradeCount / realizedTotal for all-time figures */
   trades: Trade[];
+  tradeCount: number;
+  realizedTotal: number;
   events: EventRow[];
+  /** dashboard command still waiting in the bot's single-slot queue (null once the bot has consumed it) */
+  pendingCmd: string | null;
 }
 
 export function buildPositionView(pos: Position | null, mids: Record<string, number> | undefined): PositionView | null {
@@ -77,19 +109,29 @@ export function buildState(db: DB, mode: DashMode, now = Date.now()): DashboardS
     ? { status: bs.status, lastTick: bs.lastTick, equity: bs.equity, dayStartEquity: bs.dayStartEquity, peakEquity: bs.peakEquity, halted: bs.halted, haltReason: bs.haltReason, startedAt: bs.startedAt, runId: bs.runId }
     : null;
   const position = buildPositionView(loadPosition(db, mode), info?.mids);
-  const equity = loadEquity(db, mode, 2000);
-  // live equity includes open unrealized pnl so tiles and curve agree
-  const liveEquity = bot ? bot.equity + (position?.unrealized ?? 0) : null;
+  const equity = loadEquityCurve(db, mode, now);
+  const first = db.prepare(`SELECT equity FROM equity WHERE mode=? ORDER BY t LIMIT 1`).get(mode) as { equity: number } | undefined;
+  // bot_state.equity is already mark-to-market (paper: cash + net unrealized; live: Hyperliquid accountValue),
+  // so it is used as-is: adding position.unrealized again would double-count the open PnL.
+  const liveEquity = bot ? bot.equity : null;
   const dayPnl = bot && liveEquity !== null ? liveEquity - bot.dayStartEquity : null;
   const dayPnlPct = bot && dayPnl !== null && bot.dayStartEquity > 0 ? dayPnl / bot.dayStartEquity : null;
   const peak = bot ? Math.max(bot.peakEquity, liveEquity ?? 0) : null;
   const drawdownPct = bot && peak && liveEquity !== null ? Math.max(0, (peak - liveEquity) / peak) : null;
+  const totals = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(pnl), 0) s FROM trades WHERE mode=?`).get(mode) as { n: number; s: number };
+  const other: DashMode = mode === "paper" ? "live" : "paper";
+  const ob = loadBotState(db, other);
   return {
     mode, now,
     offline: !bot || now - bot.lastTick > OFFLINE_AFTER_MS,
+    otherModeActive: !!ob && now - ob.lastTick <= OFFLINE_AFTER_MS && ob.status === "running",
     bot, info, dayPnl, dayPnlPct, drawdownPct, position, equity,
+    startEquity: first?.equity ?? null,
     scan: loadLatestScan(db, mode),
     trades: listTrades(db, mode, 100),
+    tradeCount: totals.n,
+    realizedTotal: totals.s,
     events: listEvents(db, mode, 50),
+    pendingCmd: getControl(db, `cmd:${mode}`),
   };
 }

@@ -104,7 +104,7 @@ if (flag("sweep")) {
   for (const { label, r, is, oos } of rows) {
     console.log(`${label.padEnd(50)}| ${fmt(is)} |${oos ? ` ${fmt(oos)} |` : ""} ${(r.metricsNoFees.totalReturnPct * 100).toFixed(1).padStart(6)}`);
   }
-  if (flag("save")) for (const { label, r } of rows.slice(0, 10)) saveBacktest(db, `sweep:${label}`, { ...r.params, interval: r.params, risk: r.risk, fees: r.fees }, { ...r.metrics, noFees: r.metricsNoFees, from: r.from, to: r.to, haltedAt: r.haltedAt, haltReason: r.haltReason }, r.equityCurve, r.trades);
+  if (flag("save")) for (const { label, r } of rows.slice(0, 10)) saveBacktest(db, `sweep:${label}`, { ...r.params, interval: label.split("-")[1], contextInterval: CONTEXT_OF[label.split("-")[1] as Interval], risk: r.risk, fees: r.fees, startEquity, coins }, { ...r.metrics, noFees: r.metricsNoFees, from: r.from, to: r.to, haltedAt: r.haltedAt, haltReason: r.haltReason }, r.equityCurve, r.trades);
 } else {
   const label = arg("label", `${cfg.strategy.name}-${interval}`)!;
   const r = run(cfg.strategy, interval, label, { killSwitch: (arg("kill", "halt") as "halt" | "off") });

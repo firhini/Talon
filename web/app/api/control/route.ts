@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { enqueueCommand, logEvent, type ControlCommand } from "@talon/core";
+import { enqueueCommand, getControl, logEvent, type ControlCommand } from "@talon/core";
 import { getDb } from "@/lib/db";
 import { isDashMode } from "@/lib/mode";
 
@@ -15,6 +15,17 @@ export async function POST(req: Request) {
   if (typeof cmd !== "string" || !CMDS.includes(cmd as ControlCommand)) return NextResponse.json({ ok: false, error: `cmd must be one of ${CMDS.join("|")}` }, { status: 400 });
   try {
     const db = getDb();
+    // The bot's command queue is a single slot per mode (control row `cmd:<mode>`, drained once per tick, ~15 s).
+    // Never overwrite a command the bot has not consumed yet: "reset" followed by "start" would otherwise silently
+    // drop the reset and the still-halted engine would ignore the start.
+    const pending = getControl(db, `cmd:${mode}`);
+    if (pending && pending !== cmd) {
+      return NextResponse.json(
+        { ok: false, pending, error: `'${pending}' is still waiting for the bot (it polls every ~15 s) — retry in a moment` },
+        { status: 409 },
+      );
+    }
+    if (pending === cmd) return NextResponse.json({ ok: true, mode, cmd, alreadyQueued: true }); // idempotent re-press, no duplicate event
     enqueueCommand(db, mode, cmd as ControlCommand);
     logEvent(db, mode, cmd === "kill" ? "warn" : "info", `dashboard: ${cmd} requested`);
     return NextResponse.json({ ok: true, mode, cmd });

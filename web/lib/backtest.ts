@@ -32,7 +32,8 @@ export function summarize(row: { id: number; createdAt: number; label: string; p
   const m = asMetrics(row.metrics), p = asParams(row.params);
   return {
     id: row.id, createdAt: row.createdAt, label: row.label,
-    strategy: String(p.name ?? "?"), interval: String(p.interval ?? "?"),
+    // guard: some sweep rows stored an object under `interval` — never print "[object Object]"
+    strategy: typeof p.name === "string" ? p.name : "?", interval: typeof p.interval === "string" ? p.interval : "?",
     trades: m?.trades ?? 0, winRate: m?.winRate ?? 0, profitFactor: m?.profitFactor ?? null,
     totalReturnPct: m?.totalReturnPct ?? 0, maxDrawdownPct: m?.maxDrawdownPct ?? 0,
     noFeeReturnPct: m?.noFees?.totalReturnPct ?? null, from: m?.from ?? null, to: m?.to ?? null,

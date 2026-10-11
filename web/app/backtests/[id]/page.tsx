@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getBacktest, type Trade } from "@talon/core";
-import { Nav } from "@/components/Header";
+import { getBacktest, loadBotState, type Trade } from "@talon/core";
+import { ModeBadge, Nav } from "@/components/Header";
 import LineChart from "@/components/LineChart";
 import { Panel, TradeTable } from "@/components/Panels";
 import { asMetrics, asParams, noFeeCurve, type BtMetrics } from "@/lib/backtest";
 import { getDb } from "@/lib/db";
 import { fmtDate, fmtNum, fmtPct, fmtPnl, fmtRatio, fmtTime, fmtUsd, pnlClass } from "@/lib/format";
 import { parseMode } from "@/lib/mode";
+import type { BotInfo } from "@/lib/state";
 
 export const dynamic = "force-dynamic";
 
@@ -33,8 +34,10 @@ export default async function BacktestPage({ params, searchParams }: { params: P
   const [{ id }, sp] = await Promise.all([params, searchParams]);
   const mode = parseMode(sp.mode);
   const n = Number(id);
-  const bt = Number.isInteger(n) && n > 0 ? getBacktest(getDb(), n) : null;
+  const db = getDb();
+  const bt = Number.isInteger(n) && n > 0 ? getBacktest(db, n) : null;
   if (!bt) notFound();
+  const testnet = (loadBotState(db, mode)?.info as BotInfo | null)?.testnet === true;
 
   const m = asMetrics(bt.metrics), p = asParams(bt.params);
   const nf = m?.noFees ?? null;
@@ -46,7 +49,8 @@ export default async function BacktestPage({ params, searchParams }: { params: P
   const exits = Object.entries(m?.exitReasons ?? {}).sort((a, b) => b[1] - a[1]);
   const risk = p.risk ?? {}, fees = p.fees ?? {};
   const paramRows: [string, string][] = [
-    ["Strategy", `${p.name ?? "?"} · ${p.interval ?? "?"} (ctx ${p.contextInterval ?? "?"})`],
+    // guard: sweep rows store an object under `interval` — never print "[object Object]"
+    ["Strategy", `${typeof p.name === "string" ? p.name : "?"} · ${typeof p.interval === "string" ? p.interval : "?"} (ctx ${typeof p.contextInterval === "string" ? p.contextInterval : "?"})`],
     ["Universe", (p.coins ?? []).join(", ") || "—"],
     ["Period", m?.from && m?.to ? `${fmtDate(m.from)} → ${fmtDate(m.to)}` : "—"],
     ["Start equity", fmtUsd(startEquity)],
@@ -62,6 +66,7 @@ export default async function BacktestPage({ params, searchParams }: { params: P
     <div className="mx-auto max-w-[1500px] space-y-4 px-4 py-4 pb-28 sm:px-6">
       <header className="flex flex-wrap items-center gap-4">
         <Link href={`/?mode=${mode}`} className="text-2xl font-black tracking-[0.3em] text-zinc-100">TALON</Link>
+        <ModeBadge mode={mode} testnet={testnet} big={false} />
         <span className="text-sm text-zinc-500"><Link href={`/backtests?mode=${mode}`} className="hover:text-zinc-200">Backtests</Link> / #{bt.id}</span>
         <div className="ml-auto"><Nav mode={mode} active="backtests" /></div>
       </header>
