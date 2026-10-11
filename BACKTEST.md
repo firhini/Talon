@@ -55,7 +55,7 @@ Robustness checks:
 * **Parameter neighbourhood** (lookback 36–72, stop 1.5–2.5 ATR, target 1.5–3 R, with/without volume filter: 96 variants): every variant has an in-sample profit factor ≥ 1.08 and 80 % are positive out-of-sample. The edge is a region, not a point.
 * **Last 6 months only** (`--from 2026-04-11`): +12.1 %, PF 1.14, max DD 9.1 %.
 * **Stress** (slippage 8 bps, taker 6 bps): +7.3 %, PF 1.04. Costs matter; keep the account on the base fee tier or better and trade only the liquid majors.
-* **Concentration**: HYPE made $235 of the $267 net profit (BNB +55, BTC +21, SOL +14, ETH −57). That is what trend-following looks like: most of the return comes from the one or two assets that trend. Months were 9 positive / 5 negative; the worst month was −10 %.
+* **Concentration**: HYPE made $235 of the $267 net profit (BNB +55, BTC +21, SOL +14, ETH −57). That is what trend-following looks like: most of the return comes from the one or two assets that trend. Months were 9 positive / 5 negative; the worst month (Dec 2025) lost 13 %.
 * Sizing at the brief's 20 % margin (instead of 10 %) returns more (+45 %) but with a 22–30 % drawdown that trips a 15 % kill switch within three months; 10 % + the 1 % risk cap is what keeps the system inside its own kill switch.
 
 ## 3. Honest expectation
