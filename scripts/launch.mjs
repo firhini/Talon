@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.TALON_PORT || process.env.PORT || 3000);
-const URL_ = `http://localhost:${PORT}`;
+const URL_ = `http://localhost:${PORT}`; // shown to the user / opened in the browser
+const API_ = `http://127.0.0.1:${PORT}`; // used by the launcher itself (the server binds 127.0.0.1; "localhost" may resolve to ::1 on Windows)
 const WIN = process.platform === "win32";
 const log = (s) => console.log(`[talon] ${s}`);
 const die = (s) => { console.error(`\n[talon] ${s}\n`); process.exit(1); };
@@ -26,7 +27,8 @@ if (maj < 22 || (maj === 22 && min < 12)) {
 
 // ---------- helpers ----------
 function run(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { cwd: ROOT, stdio: "inherit", shell: WIN, ...opts });
+  // Windows: npm is npm.cmd and needs a shell; pass one command string (array args + shell is deprecated in Node 24)
+  const r = WIN ? spawnSync([cmd, ...args].join(" "), { cwd: ROOT, stdio: "inherit", shell: true, ...opts }) : spawnSync(cmd, args, { cwd: ROOT, stdio: "inherit", ...opts });
   if (r.error) die(`${cmd} failed to start: ${r.error.message}`);
   if (r.status !== 0) die(`"${cmd} ${args.join(" ")}" exited with code ${r.status}`);
 }
@@ -52,7 +54,7 @@ const stale = (out, ...srcDirs) => !existsSync(out) || Math.max(...srcDirs.map(n
 async function probe(timeoutMs = 1500) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
-  try { const r = await fetch(`${URL_}/api/system?lines=0`, { signal: ctl.signal }); return r.ok; } catch { return false; } finally { clearTimeout(t); }
+  try { const r = await fetch(`${API_}/api/system?lines=0`, { signal: ctl.signal }); return r.ok; } catch { return false; } finally { clearTimeout(t); }
 }
 function openBrowser(url) {
   try {
@@ -127,7 +129,7 @@ async function shutdown(sig) {
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 20_000);
-    const r = await fetch(`${URL_}/api/process`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "stop" }), signal: ctl.signal });
+    const r = await fetch(`${API_}/api/process`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "stop" }), signal: ctl.signal });
     clearTimeout(t);
     const b = await r.json().catch(() => ({}));
     log(`bot process: ${b?.process?.status ?? "unknown"}`);
