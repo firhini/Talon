@@ -1,0 +1,27 @@
+{
+  "name": "@talon/bot",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "fetch-data": "tsx src/cli/fetch-data.ts",
+    "backtest": "tsx src/cli/backtest.ts",
+    "scan": "tsx src/cli/scan.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@nktkas/hyperliquid": "^0.33.3",
+    "@talon/core": "0.1.0",
+    "dotenv": "^16.4.5",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

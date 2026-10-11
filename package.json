@@ -1,0 +1,26 @@
+{
+  "name": "talon",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TALON - Hyperliquid perps trading agent with live dashboard",
+  "type": "module",
+  "workspaces": [
+    "core",
+    "bot",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build -w core && npm run build -w bot && npm run build -w web",
+    "build:core": "npm run build -w core",
+    "test": "npm run test -w core && npm run test -w bot",
+    "fetch-data": "npm run build -w core && npm run fetch-data -w bot",
+    "backtest": "npm run build -w core && npm run backtest -w bot",
+    "scan": "npm run build -w core && npm run scan -w bot",
+    "bot": "npm run build -w core && npm run start -w bot",
+    "web": "npm run dev -w web",
+    "typecheck": "npm run typecheck -w core && npm run typecheck -w bot"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
