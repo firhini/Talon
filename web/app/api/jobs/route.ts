@@ -1,4 +1,4 @@
-import { bad, fail, intParam, ok, readJson } from "@/lib/api";
+import { bad, fail, intParam, ok, readJson, guardOrigin } from "@/lib/api";
 import { getSupervisor, validateJob } from "@/lib/supervisor";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ export function GET(req: Request) {
 
 /** POST {kind: fetch|backtest|sweep|scan, args: {...}} → {id} */
 export async function POST(req: Request) {
+  const cors = guardOrigin(req); if (cors) return cors;
   const body = await readJson(req);
   if (!body) return bad("body must be a JSON object {kind, args}");
   const v = validateJob(body.kind, body.args);

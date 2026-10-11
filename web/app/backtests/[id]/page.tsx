@@ -1,14 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getBacktest, loadBotState, type Trade } from "@talon/core";
-import { ModeBadge, Nav } from "@/components/Header";
+import { getBacktest, type Trade } from "@talon/core";
+import { BacktestDetailActions } from "@/components/BacktestActions";
+import { Donut, HBars, Histogram, McStrip, MonthHeatmap } from "@/components/Charts";
+import { PageHeader } from "@/components/Header";
 import LineChart from "@/components/LineChart";
 import { Panel, TradeTable } from "@/components/Panels";
-import { asMetrics, asParams, noFeeCurve, type BtMetrics } from "@/lib/backtest";
+import { asMetrics, asParams, mcSentence, noFeeCurve, presetForLabel, type BtMetrics } from "@/lib/backtest";
 import { getDb } from "@/lib/db";
-import { fmtDate, fmtNum, fmtPct, fmtPnl, fmtRatio, fmtTime, fmtUsd, pnlClass } from "@/lib/format";
-import { parseMode } from "@/lib/mode";
-import type { BotInfo } from "@/lib/state";
+import { effectiveConfig } from "@/lib/effective";
+import { fmtDate, fmtMult, fmtNum, fmtPct, fmtPnl, fmtRatio, fmtTime, fmtUsd, pnlClass } from "@/lib/format";
+import { resolveMode } from "@/lib/state";
+import { drawdownSeries, tradeStats } from "@/lib/stats";
+import { getSupervisor } from "@/lib/supervisor";
 
 export const dynamic = "force-dynamic";
 
@@ -32,12 +36,12 @@ const ROWS: Row[] = [
 
 export default async function BacktestPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const [{ id }, sp] = await Promise.all([params, searchParams]);
-  const mode = parseMode(sp.mode);
-  const n = Number(id);
   const db = getDb();
+  const mode = resolveMode(db, sp.mode);
+  const n = Number(id);
   const bt = Number.isInteger(n) && n > 0 ? getBacktest(db, n) : null;
   if (!bt) notFound();
-  const testnet = (loadBotState(db, mode)?.info as BotInfo | null)?.testnet === true;
+  const cfg = effectiveConfig(db);
 
   const m = asMetrics(bt.metrics), p = asParams(bt.params);
   const nf = m?.noFees ?? null;
@@ -46,41 +50,46 @@ export default async function BacktestPage({ params, searchParams }: { params: P
   const startEquity = Number(p.startEquity ?? curve[0]?.equity ?? 0);
   const series = [{ name: "With fees", color: "#3987e5", points: curve.map((c) => ({ t: c.t, v: c.equity })) }];
   if (nf) series.push({ name: "No fees", color: "#d95926", points: noFeeCurve(trades, startEquity, curve[0]?.t ?? null).map((c) => ({ t: c.t, v: c.equity })), ...{ dashed: true } });
-  const exits = Object.entries(m?.exitReasons ?? {}).sort((a, b) => b[1] - a[1]);
+  const dd = drawdownSeries(curve.map((c) => ({ t: c.t, v: c.equity })));
+  const st = tradeStats(trades, Number(m?.to ?? Date.now()));
   const risk = p.risk ?? {}, fees = p.fees ?? {};
+  const presetId = presetForLabel(bt.label);
   const paramRows: [string, string][] = [
     // guard: sweep rows store an object under `interval` — never print "[object Object]"
     ["Strategy", `${typeof p.name === "string" ? p.name : "?"} · ${typeof p.interval === "string" ? p.interval : "?"} (ctx ${typeof p.contextInterval === "string" ? p.contextInterval : "?"})`],
     ["Universe", (p.coins ?? []).join(", ") || "—"],
-    ["Period", m?.from && m?.to ? `${fmtDate(m.from)} → ${fmtDate(m.to)}` : "—"],
+    ["Period", m?.from && m?.to ? `${fmtDate(m.from)} → ${fmtDate(m.to)} (${Math.round((m.to - m.from) / 86_400_000)} days)` : "—"],
     ["Start equity", fmtUsd(startEquity)],
-    ["Leverage / size", `${risk.leverage ?? "?"}x · ${risk.sizeFraction !== undefined ? fmtPct(risk.sizeFraction, 0, false) : "?"} · compound ${risk.compound ? "on" : "off"}`],
+    ["Leverage / size / risk per trade", `${risk.leverage ?? "?"}x${risk.dynamicLeverage ? " dynamic" : ""} (max ${risk.maxLeverage ?? "?"}x) · ${risk.sizeFraction !== undefined ? fmtPct(risk.sizeFraction, 0, false) : "?"} · ${risk.riskPerTradePct !== undefined ? fmtPct(risk.riskPerTradePct, 1, false) : "?"} · compound ${risk.compound ? "on" : "off"}`],
     ["Hard stop ROE / daily loss / max DD", `${risk.hardStopRoe !== undefined ? fmtPct(risk.hardStopRoe, 0, false) : "?"} · ${risk.dailyLossLimitPct !== undefined ? fmtPct(risk.dailyLossLimitPct, 1, false) : "?"} · ${risk.maxDrawdownPct !== undefined ? fmtPct(risk.maxDrawdownPct, 1, false) : "?"}`],
     ["Fees (taker / slippage / funding h)", `${fees.takerFeeBps ?? "?"} bps · ${fees.slippageBps ?? "?"} bps · ${fees.defaultHourlyFunding ?? "?"}`],
     ["Lookback / vol mult / R / trail ATR", `${p.lookback ?? "?"} · ${String(p.volumeMult ?? "?")}x · ${String(p.rMultiple ?? "?")}R · ${String(p.trailAtrMult ?? "?")}`],
-    ["Stop ATR / chase ATR / trend filter", `${String(p.stopAtrMult ?? "?")} · ${String(p.maxChaseAtr ?? "?")} · ${String(p.trendFilter ?? "?")}`],
+    ["Stop ATR / chase ATR / trend filter / ER min", `${String(p.stopAtrMult ?? "?")} · ${String(p.maxChaseAtr ?? "?")} · ${String(p.trendFilter ?? "?")} · ${String(p.regimeErMin ?? "0")}`],
+    ["Pyramiding", `${String(p.maxUnits ?? 1)} unit${Number(p.maxUnits ?? 1) > 1 ? `s, add every ${String(p.addEveryAtr ?? "?")} ATR` : ""}`],
     ["Kill switch", m?.haltedAt ? `${fmtTime(m.haltedAt)} UTC — ${m.haltReason ?? ""}` : `not triggered${m?.dailyHalts ? ` (${m.dailyHalts} daily halts)` : ""}`],
   ];
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-4 px-4 py-4 pb-28 sm:px-6">
-      <header className="flex flex-wrap items-center gap-4">
-        <Link href={`/?mode=${mode}`} className="text-2xl font-black tracking-[0.3em] text-zinc-100">TALON</Link>
-        <ModeBadge mode={mode} testnet={testnet} big={false} />
+    <div className="mx-auto max-w-[1600px] space-y-4 px-4 py-3 pb-24 sm:px-6">
+      <PageHeader mode={mode} testnet={cfg.testnet} active="backtests" title="" process={getSupervisor().process()}>
         <span className="text-sm text-zinc-500"><Link href={`/backtests?mode=${mode}`} className="hover:text-zinc-200">Backtests</Link> / #{bt.id}</span>
-        <div className="ml-auto"><Nav mode={mode} active="backtests" /></div>
-      </header>
+      </PageHeader>
 
-      <div className="flex flex-wrap items-baseline gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold">{bt.label}</h1>
+        {presetId && <Link href={`/strategies?mode=${mode}`} className="chip border-zinc-700 text-zinc-300 hover:border-zinc-500">preset {presetId}</Link>}
         <span className="text-xs text-zinc-500">saved {fmtTime(bt.createdAt)} UTC</span>
+        <BacktestDetailActions id={bt.id} mode={mode} />
         {m && <span className={`num ml-auto text-2xl font-bold ${pnlClass(m.totalReturnPct)}`}>{fmtPct(m.totalReturnPct, 1)}</span>}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-5">
-        <Panel title="Equity curve" className="xl:col-span-3">
+        <Panel title="Equity curve & drawdown" className="xl:col-span-3">
           <div className="px-2 pt-3 pb-1">
             <LineChart series={series} yFormat="usd" baseline={startEquity || undefined} markerT={m?.haltedAt ?? null} markerLabel="kill switch" height={300} />
+          </div>
+          <div className="border-t border-zinc-800/70 px-2 pt-2 pb-1">
+            <LineChart series={[{ name: "Drawdown", color: "#fb7185", points: dd }]} yFormat="pct" baseline={0} fillFrom="baseline" yMin={-0.05} yMax={0} height={120} />
           </div>
         </Panel>
         <Panel title="Metrics" className="xl:col-span-2">
@@ -100,27 +109,61 @@ export default async function BacktestPage({ params, searchParams }: { params: P
         </Panel>
       </div>
 
+      {m?.mc && (
+        <Panel title="Monte-Carlo — bootstrap of the trade sequence" right={`${m.mc.paths.toLocaleString("en-US")} paths · ${st.n} trades resampled with full compounding`}>
+          <div className="grid gap-4 px-4 py-3 xl:grid-cols-5">
+            <div className="xl:col-span-3">
+              <McStrip mc={m.mc} />
+              <p className="mt-2 text-sm leading-relaxed text-zinc-300">{mcSentence(m.mc)}</p>
+              <p className="mt-1 text-xs text-zinc-500">Trades are drawn with replacement from this backtest&apos;s per-trade returns (pnl ÷ equity before the trade), so the distribution assumes the same edge persists; it says nothing about regime change.</p>
+            </div>
+            <table className="data xl:col-span-2">
+              <tbody>
+                {([["p5", m.mc.p5], ["p25", m.mc.p25], ["median", m.mc.p50], ["p75", m.mc.p75], ["p95", m.mc.p95]] as [string, number][]).map(([k, v]) => <tr key={k}><td className="text-zinc-400">Final equity {k}</td><td className={`r num ${v >= 1 ? "text-emerald-400" : "text-rose-400"}`}>{fmtMult(v)}</td></tr>)}
+                <tr><td className="text-zinc-400">P(drawdown &gt; 50 %)</td><td className="r num text-amber-300">{fmtPct(m.mc.pDd50, 1, false)}</td></tr>
+                <tr><td className="text-zinc-400">P(ruin, drawdown &gt; 90 %)</td><td className="r num text-rose-300">{fmtPct(m.mc.pDd90, 1, false)}</td></tr>
+                <tr><td className="text-zinc-400">P(ending below start)</td><td className="r num">{fmtPct(m.mc.pLoss, 1, false)}</td></tr>
+                <tr><td className="text-zinc-400">Median max drawdown</td><td className="r num text-rose-300">-{fmtPct(m.mc.medianMaxDd, 1, false)}</td></tr>
+                <tr><td className="text-zinc-400">Mean return per trade</td><td className={`r num ${pnlClass(m.mc.meanTradePct)}`}>{fmtPct(m.mc.meanTradePct, 3)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Panel title="R-multiple distribution" right={`avg ${fmtRatio(st.expectancyR, 2)}R`} bodyClass="px-2 pt-2 pb-1"><Histogram bins={st.rHistogram} height={150} /></Panel>
+        <Panel title="Monthly PnL" right={`${st.monthly.filter((x) => x.pnl > 0).length} up · ${st.monthly.filter((x) => x.pnl <= 0).length} down`} bodyClass="px-3 pt-2 pb-2"><MonthHeatmap monthly={st.monthly} /></Panel>
+        <Panel title="PnL by coin" bodyClass="px-2 pt-2 pb-1"><HBars rows={st.perCoin} /></Panel>
+        <Panel title="Exit reasons" bodyClass="px-3 py-3"><Donut rows={st.exitReasons} /></Panel>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-5">
         <Panel title="Parameters" className="xl:col-span-3">
           <table className="data">
-            <tbody>{paramRows.map(([k, v]) => <tr key={k}><td className="w-72 text-zinc-400">{k}</td><td className="num text-zinc-200">{v}</td></tr>)}</tbody>
+            <tbody>{paramRows.map(([k, v]) => <tr key={k}><td className="w-80 text-zinc-400">{k}</td><td className="num text-zinc-200">{v}</td></tr>)}</tbody>
           </table>
         </Panel>
-        <Panel title="Exit reasons" className="xl:col-span-2">
-          <table className="data">
-            <thead><tr><th>Reason</th><th className="r">Count</th><th className="r">Share</th></tr></thead>
-            <tbody>
-              {exits.length === 0 && <tr><td colSpan={3} className="py-6 text-center text-zinc-500">No trades</td></tr>}
-              {exits.map(([k, v]) => (
-                <tr key={k}><td>{k}</td><td className="r num">{v}</td><td className="r num text-zinc-400">{m?.trades ? fmtPct(v / m.trades, 1, false) : "—"}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
+        <div className="grid gap-4 xl:col-span-2">
+          <Panel title="By coin">
+            <table className="data dense">
+              <thead><tr><th>Coin</th><th className="r">Trades</th><th className="r">Win</th><th className="r">PnL</th><th className="r">Share</th></tr></thead>
+              <tbody>{st.perCoin.map((c) => <tr key={c.key}><td className="font-semibold">{c.key}</td><td className="r num">{c.n}</td><td className="r num">{fmtPct(c.wins / c.n, 0, false)}</td><td className={`r num ${pnlClass(c.pnl)}`}>{fmtPnl(c.pnl)}</td><td className="r num text-zinc-500">{st.net !== 0 ? fmtPct(c.pnl / Math.abs(st.net), 0, false) : "—"}</td></tr>)}</tbody>
+            </table>
+          </Panel>
+          <Panel title="By month">
+            <div className="scroll-y max-h-64 overflow-y-auto">
+              <table className="data dense">
+                <thead><tr><th>Month</th><th className="r">Trades</th><th className="r">Win</th><th className="r">PnL</th><th className="r">vs start</th></tr></thead>
+                <tbody>{st.monthly.map((c) => <tr key={c.key}><td>{c.key}</td><td className="r num">{c.n}</td><td className="r num">{fmtPct(c.wins / c.n, 0, false)}</td><td className={`r num ${pnlClass(c.pnl)}`}>{fmtPnl(c.pnl)}</td><td className={`r num ${pnlClass(c.pnl)}`}>{startEquity ? fmtPct(c.pnl / startEquity, 1) : "—"}</td></tr>)}</tbody>
+              </table>
+            </div>
+          </Panel>
+        </div>
       </div>
 
-      <Panel title="Trades" right={`${trades.length} trades`}>
-        <div className="max-h-[40rem] overflow-y-auto"><TradeTable trades={[...trades].sort((a, b) => b.exitTime - a.exitTime)} /></div>
+      <Panel title="Trades" right={`${trades.length} trades · ${st.longs} long / ${st.shorts} short`}>
+        <div className="scroll-y max-h-[40rem] overflow-y-auto"><TradeTable trades={[...trades].sort((a, b) => b.exitTime - a.exitTime)} /></div>
       </Panel>
     </div>
   );

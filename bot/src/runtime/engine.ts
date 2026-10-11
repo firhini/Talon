@@ -20,6 +20,7 @@ export class Engine {
   private mids: Record<string, number> = {};
   private candles: Record<string, { primary: Candle[]; context: Candle[] }> = {};
   private stopping = false;
+  private wake: (() => void) | null = null;
   /** a halt whose flatten failed; retried every tick */
   private flattenPending: string | null = null;
   /** a pyramid add whose stop re-placement failed; retried every tick until the whole size is protected */
@@ -51,13 +52,15 @@ export class Engine {
     this.lastFundingHour = Math.floor(Date.now() / 3_600_000) * 3_600_000;
     logEvent(this.db, this.mode, "info", `bot started (${this.mode}, ${this.cfg.strategy.name}, ${this.cfg.universe.join("/")}, ${this.cfg.risk.leverage}x, ${(this.cfg.risk.sizeFraction * 100).toFixed(0)}% size) status=${this.status}`);
     this.persist();
-    const stop = () => { this.stopping = true; };
+    const stop = () => { this.stopping = true; this.wake?.(); };
     process.on("SIGINT", stop); process.on("SIGTERM", stop);
     while (!this.stopping) {
       const t0 = Date.now();
       try { await this.tick(); } catch (e) { this.log(`tick error: ${(e as Error).message}`); logEvent(this.db, this.mode, "error", `tick error: ${(e as Error).message}`); }
       const wait = Math.max(1000, this.cfg.pollIntervalMs - (Date.now() - t0));
-      await new Promise((r) => setTimeout(r, wait));
+      // interruptible sleep: a stop signal ends the wait immediately (a tick in flight always completes first)
+      await new Promise<void>((r) => { const t = setTimeout(r, wait); this.wake = () => { clearTimeout(t); r(); }; });
+      this.wake = null;
     }
     this.log("stopping (position and stop orders stay as they are)");
     this.persist("stopped");

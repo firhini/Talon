@@ -107,7 +107,7 @@ export function HBars({ rows, getValue = (r) => r.pnl, labelOf = (r) => r.key, f
 }
 
 const DONUT_COLORS = [BLUE, "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9", "#e66767", "#71717a"];
-export function Donut({ rows, size = 120 }: { rows: Agg[]; size?: number }) {
+export function Donut({ rows, size = 104 }: { rows: Agg[]; size?: number }) {
   const total = rows.reduce((a, r) => a + r.n, 0);
   if (!total) return <Empty height={size} text="No exits yet" />;
   const R = size / 2 - 4, r = R * 0.62, cx = size / 2, cy = size / 2;
@@ -128,13 +128,11 @@ export function Donut({ rows, size = 120 }: { rows: Agg[]; size?: number }) {
         <text x={cx} y={cy - 2} textAnchor="middle" fontSize={16} fontWeight={700} fill="#e7e7ea">{total}</text>
         <text x={cx} y={cy + 12} textAnchor="middle" fontSize={9} fill={MUTED}>exits</text>
       </svg>
-      <ul className="min-w-0 flex-1 space-y-1 text-xs">
+      <ul className="min-w-0 flex-1 space-y-1.5 text-xs">
         {arcs.map((a, i) => (
-          <li key={i} className="flex items-center gap-2">
-            <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: a.color }} />
-            <span className="truncate text-zinc-300">{a.row.key}</span>
-            <span className="num ml-auto text-zinc-500">{a.row.n} · {Math.round(a.frac * 100)}%</span>
-            <span className={`num w-16 text-right ${a.row.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{fmtPnl(a.row.pnl, 0)}</span>
+          <li key={i} className="min-w-0">
+            <div className="flex items-center gap-2"><span className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: a.color }} /><span className="truncate text-zinc-200" title={a.row.key}>{a.row.key}</span></div>
+            <div className="num pl-[18px] text-[10px] text-zinc-500">{a.row.n} · {Math.round(a.frac * 100)}% · <span className={a.row.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>{fmtPnl(a.row.pnl, 0)}</span></div>
           </li>
         ))}
       </ul>

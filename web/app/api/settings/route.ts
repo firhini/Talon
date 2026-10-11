@@ -1,5 +1,5 @@
 import { logEvent, setSettings } from "@talon/core";
-import { bad, fail, ok, readJson } from "@/lib/api";
+import { bad, fail, ok, readJson, guardOrigin } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { isSecretKey, settableKeys, validateSetting } from "@/lib/effective";
 import { settingsPayload } from "@/lib/payloads";
@@ -13,6 +13,7 @@ export function GET() {
 
 /** PUT {values: {KEY: "value" | null}} — null/"" removes the override. Secrets are refused here (see /api/secrets). */
 export async function PUT(req: Request) {
+  const cors = guardOrigin(req); if (cors) return cors;
   const body = await readJson(req);
   if (!body || !body.values || typeof body.values !== "object" || Array.isArray(body.values)) return bad("body must be {values: {KEY: value}}");
   const values = body.values as Record<string, unknown>;

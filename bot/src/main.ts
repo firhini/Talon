@@ -49,3 +49,4 @@ if (cfg.mode === "live") {
 }
 await engine.start();
 db.close();
+process.exit(0); // do not wait for keep-alive sockets

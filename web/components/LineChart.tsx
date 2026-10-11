@@ -10,6 +10,9 @@ interface Props {
   yFormat?: "usd" | "int" | "pct";
   /** area under series[0]: to the bottom of the plot (default) or to the baseline (drawdown style) */
   fillFrom?: "bottom" | "baseline";
+  /** the y range always covers these values (e.g. a drawdown pane shows at least 0 … -5 %) */
+  yMin?: number;
+  yMax?: number;
   /** horizontal reference line (e.g. start equity) */
   baseline?: number;
   /** vertical marker (e.g. kill switch time) */
@@ -49,8 +52,8 @@ function timeLabel(span: number): (t: number) => string {
   return (t) => fmtTime(t).slice(0, 10);
 }
 
-export default function LineChart({ series, height = 260, yFormat = "int", baseline, markerT, markerLabel, emptyText = "No data yet", fillFrom = "bottom" }: Props) {
-  const fmtY = yFormat === "usd" ? (v: number) => fmtUsd(v, 0) : yFormat === "pct" ? (v: number) => `${(v * 100).toFixed(Math.abs(v) < 0.1 ? 1 : 0)}%` : (v: number) => v.toFixed(0);
+export default function LineChart({ series, height = 260, yFormat = "int", baseline, markerT, markerLabel, emptyText = "No data yet", fillFrom = "bottom", yMin, yMax }: Props) {
+  const fmtYd = (dec: number) => (yFormat === "usd" ? (v: number) => fmtUsd(v, dec) : yFormat === "pct" ? (v: number) => `${(v * 100).toFixed(dec)}%` : (v: number) => v.toFixed(dec));
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800); // same initial value on server and client -> no hydration mismatch
   const [hover, setHover] = useState<{ x: number; t: number; vals: { name: string; color: string; v: number }[] } | null>(null);
@@ -68,7 +71,9 @@ export default function LineChart({ series, height = 260, yFormat = "int", basel
     let tMin = Infinity, tMax = -Infinity, vMin = Infinity, vMax = -Infinity;
     for (const p of all) { if (p.t < tMin) tMin = p.t; if (p.t > tMax) tMax = p.t; if (p.v < vMin) vMin = p.v; if (p.v > vMax) vMax = p.v; }
     if (baseline !== undefined) { vMin = Math.min(vMin, baseline); vMax = Math.max(vMax, baseline); }
-    if (vMax === vMin) { vMax += 1; vMin -= 1; }
+    if (yMin !== undefined) vMin = Math.min(vMin, yMin);
+    if (yMax !== undefined) vMax = Math.max(vMax, yMax);
+    if (vMax === vMin) { const d = Math.abs(vMax) * 0.002 || 1; vMax += d; vMin -= d; }
     const padV = (vMax - vMin) * 0.06; vMin -= padV; vMax += padV;
     if (tMax === tMin) tMax = tMin + 1;
     const iw = width - PAD.l - PAD.r, ih = height - PAD.t - PAD.b;
@@ -80,10 +85,13 @@ export default function LineChart({ series, height = 260, yFormat = "int", basel
       ? `${paths[0]}L${x(series[0].points[series[0].points.length - 1].t).toFixed(1)},${floor.toFixed(1)}L${x(series[0].points[0].t).toFixed(1)},${floor.toFixed(1)}Z`
       : "";
     const yt = niceTicks(vMin, vMax, 4);
+    const step = yt.length > 1 ? yt[1] - yt[0] : vMax - vMin;
+    const dec = yFormat === "pct" ? (step * 100 < 1 ? 1 : 0) : step < 1 ? 2 : 0;
     const xt = timeTicks(tMin, tMax, Math.max(2, Math.min(6, Math.floor(iw / 140))));
     const xLabel = timeLabel(tMax - tMin);
-    return { tMin, tMax, vMin, vMax, x, y, paths, area, yt, xt, xLabel, iw, ih };
-  }, [all, series, width, height, baseline, fillFrom]);
+    return { tMin, tMax, vMin, vMax, x, y, paths, area, yt, xt, xLabel, iw, ih, dec };
+  }, [all, series, width, height, baseline, fillFrom, yMin, yMax, yFormat]);
+  const fmtY = fmtYd(model?.dec ?? 0);
 
   function onMove(e: React.MouseEvent<SVGSVGElement>) {
     if (!model) return;

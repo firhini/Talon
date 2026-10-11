@@ -14,6 +14,27 @@ Modes (`MODE` env): `backtest` | `paper` (default) | `live`. The same strategy a
 
 ---
 
+## 0. One-click start
+
+Everything is driven from the dashboard; no terminal commands are needed after the first start.
+
+* **Windows:** double-click `talon.bat`. **macOS / Linux:** double-click or run `./talon.sh` (or `npm start`).
+* The launcher checks for Node 22.12+, installs dependencies on the first run, builds whatever is stale, creates `data/` and a `.env` from `.env.example`, starts the production dashboard on http://localhost:3000 and opens it in your browser. `TALON_PORT` changes the port.
+* From the dashboard: fetch candles, run and compare backtests, pick a strategy preset (Strategy lab), change every setting, store the API-wallet key, start/stop/restart the bot process (paper or, after a typed `LIVE` confirmation, live) and watch logs, jobs and stats live. First run shows a four-step wizard.
+* `Ctrl+C` in the launcher window stops the dashboard and the bot process; an open position and its exchange stop orders are left as they are (nothing is flattened).
+
+### Everything from the dashboard
+
+Once it is up you never need a terminal again:
+
+* **Command center** (`/`): bot process start/stop/restart, trading start/pause/kill-switch/reset, live ticker (price, 24h change, funding, open interest, volume), equity and drawdown charts, R-multiple histogram, monthly PnL heatmap, PnL by coin, exit reasons, open position with units / stop distance / next add level, market scan, trade log, events, bot and job logs.
+* **Strategy lab** (`/strategies`): the three presets (Talon Trend, Reclaim, APEX Moonshot) with risk level, warnings, latest backtest numbers and the Monte-Carlo distribution; *Activate* writes the preset to the settings and restarts the bot, *Run backtest* and *Compare* run jobs in the background; advanced parameter overrides on top of the active preset.
+* **Backtests** (`/backtests`): every saved run with metrics, equity/drawdown curves, Monte-Carlo panel, per-coin/per-month breakdown, trade table, re-run and delete.
+* **Settings** (`/settings`): every parameter with its effective value and source (preset / settings / .env / default), the secrets section (the API-wallet key is written only to `.env`, never to the database, and never shown again) and the go-live checklist with the typed-`LIVE` confirmation.
+* **System** (`/system`): bot process and logs, job queue (fetch data, backtests, sweeps) with live logs, data coverage per coin and interval, one-click "Fetch / update data" and "Run all preset backtests".
+
+The dashboard binds to `127.0.0.1` only and refuses cross-origin requests; it has no login, so do not expose it (set `TALON_HOST=0.0.0.0` only behind your own VPN/auth). `TALON_PORT` changes the port. A first-run wizard appears when the database has no candles yet (fetch data → run backtests → pick a preset → start paper).
+
 ## 1. Setup
 
 Requirements: Node 22.12+ (the Hyperliquid SDK needs it), npm 10.

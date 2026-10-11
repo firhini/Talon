@@ -1,3 +1,4 @@
+import { isPresetId } from "./effective";
 import {
   allSettings, getControl, listEvents, listTrades, loadBotState, loadLatestScan, loadPosition, PRESETS, roe, stopDistancePct, unrealizedPnl,
   type DB, type Position, type PresetId, type ScanRow, type Trade,
@@ -37,7 +38,7 @@ export interface BotInfo {
   dailyLossLimitPct?: number; maxDrawdownPct?: number; hardStopRoe?: number; mids?: Record<string, number>;
   cash?: number | null; lastCandle?: number | null; testnet?: boolean; baseEquity?: number; lastStatus?: string;
   /** pyramiding (exposed by the engine when the strategy adds units) */
-  maxUnits?: number; nextAddPrice?: number | null; units?: number; preset?: string;
+  maxUnits?: number; nextAdd?: number | null; nextAddPrice?: number | null; units?: number; preset?: string | null;
 }
 
 export interface BotView {
@@ -109,7 +110,7 @@ export function buildPositionView(pos: Position | null, mids: Record<string, num
   if (!pos) return null;
   const mark = mids?.[pos.coin];
   const maxUnits = typeof info?.maxUnits === "number" ? info.maxUnits : null;
-  const nextAddPrice = typeof info?.nextAddPrice === "number" ? info.nextAddPrice : null;
+  const nextAddPrice = typeof info?.nextAdd === "number" ? info.nextAdd : typeof info?.nextAddPrice === "number" ? info.nextAddPrice : null;
   const liq = pos.leverage > 0 ? (pos.side === "long" ? pos.entryPrice * (1 - 1 / pos.leverage) : pos.entryPrice * (1 + 1 / pos.leverage)) : null;
   if (mark === undefined || !Number.isFinite(mark) || mark <= 0) {
     return { ...pos, mark: null, notional: null, unrealized: null, roe: null, stopDistancePct: null, tpDistancePct: null, openR: null, liqPrice: liq, maxUnits, nextAddPrice };
@@ -167,7 +168,7 @@ export function buildState(db: DB, mode: DashMode, now = Date.now()): DashboardS
   const other: DashMode = mode === "paper" ? "live" : "paper";
   const ob = loadBotState(db, other);
   const settings = allSettings(db);
-  const presetId = settings.STRATEGY_PRESET in PRESETS ? (settings.STRATEGY_PRESET as PresetId) : null;
+  const presetId = isPresetId(settings.STRATEGY_PRESET) ? settings.STRATEGY_PRESET : null;
   const preset = presetId ? PRESETS[presetId] : null;
   const sup = getSupervisor();
   const jobs = sup.jobs(8);

@@ -7,7 +7,7 @@ import {
   type DB, type JobKind, type JobRow, type PresetId,
 } from "@talon/core";
 import { dbPath, getDb } from "./db";
-import { composeEnv, liveChecklist } from "./effective";
+import { composeEnv, liveChecklist, isPresetId } from "./effective";
 
 /**
  * Server-side process supervisor: runs the bot as a child process and executes dashboard jobs (data fetch,
@@ -26,11 +26,11 @@ export interface JobView {
   durationMs: number | null; result: unknown; pid: number | null; logTail: string;
 }
 export class SupervisorError extends Error {
-  constructor(message: string, public readonly status: number) { super(message); }
+  constructor(message: string, public readonly status: number) { super(message); this.name = "SupervisorError"; }
 }
 
 const LOG_MAX = 5 * 1024 * 1024;
-const STOP_GRACE_MS = 15_000;
+const STOP_GRACE_MS = 60_000; // > the bot poll interval: a tick in flight (entry fill → stop placement) must never be SIGKILLed
 const JOB_GRACE_MS = 5_000;
 const TOKEN_TTL_MS = 120_000;
 
@@ -267,7 +267,7 @@ export class Supervisor {
     const bin = (name: string) => resolve(REPO_ROOT, "bot", "dist", "cli", `${name}.js`);
     const argv: string[] = [];
     let env: NodeJS.ProcessEnv;
-    const preset = typeof a.preset === "string" && a.preset in PRESETS ? (a.preset as PresetId) : undefined;
+    const preset = isPresetId(a.preset) ? a.preset : undefined;
     const extra = a.env && typeof a.env === "object" ? (a.env as unknown as Record<string, string>) : undefined;
     try {
       switch (j.kind) {
@@ -281,6 +281,7 @@ export class Supervisor {
           break;
         case "backtest":
           argv.push(bin("backtest"), "--label", a.label || `${preset ?? "custom"} ${new Date().toISOString().slice(0, 16)}`);
+          if (preset) argv.push("--preset", preset);
           if (a.from) argv.push("--from", a.from);
           if (a.to) argv.push("--to", a.to);
           if (a.kill) argv.push("--kill", a.kill);
@@ -290,6 +291,7 @@ export class Supervisor {
           break;
         case "sweep":
           argv.push(bin("backtest"), "--sweep", "--save");
+          if (preset) argv.push("--preset", preset);
           if (a.validateFrom) argv.push("--validate-from", a.validateFrom);
           if (a.grid) argv.push("--grid", a.grid);
           if (a.strategy) argv.push("--strategy", a.strategy);
@@ -373,11 +375,11 @@ export function validateJob(kind: unknown, args: unknown): { kind: JobKind; args
   };
   const checks: (string | null)[] = [];
   if (kind === "fetch") checks.push(str("from", DATE_RE), str("to", DATE_RE), str("intervals", /^(15m|1h|4h)(,(15m|1h|4h))*$/), str("coins", /^[A-Za-z0-9,]+$/));
-  if (kind === "backtest") checks.push(str("label", /^[^\n\r]{1,80}$/), str("from", DATE_RE), str("to", DATE_RE), str("kill", /^(halt|off)$/), str("interval", /^(15m|1h|4h)$/), str("preset", /^[a-z0-9_-]+$/));
-  if (kind === "sweep") checks.push(str("validateFrom", DATE_RE), str("grid", /^[A-Za-z0-9=,.;\s-]+$/, 300), str("strategy", /^(donchian|reclaim|apex)$/), str("interval", /^(15m|1h|4h)$/), str("only", /^[A-Za-z0-9_.-]+$/), str("preset", /^[a-z0-9_-]+$/));
+  if (kind === "backtest") checks.push(str("label", /^[^\n\r-][^\n\r]{0,79}$/), str("from", DATE_RE), str("to", DATE_RE), str("kill", /^(halt|off)$/), str("interval", /^(15m|1h|4h)$/), str("preset", /^[a-z0-9_-]+$/));
+  if (kind === "sweep") checks.push(str("validateFrom", DATE_RE), str("grid", /^[A-Za-z0-9=,.;\s-]+$/, 300), str("strategy", /^(donchian|reclaim|apex)$/), str("interval", /^(15m|1h|4h)$/), str("only", /^[^-][A-Za-z0-9_.-]+$/), str("preset", /^[a-z0-9_-]+$/));
   const bad = checks.find((c) => c !== null);
   if (bad) return { error: bad };
-  if (typeof out.preset === "string" && !(out.preset in PRESETS)) return { error: `unknown preset ${out.preset}` };
+  if (typeof out.preset === "string" && !isPresetId(out.preset)) return { error: `unknown preset ${out.preset}` };
   if (a.env !== undefined) {
     if (!a.env || typeof a.env !== "object" || Array.isArray(a.env)) return { error: "env must be an object" };
     const env: Record<string, string> = {};

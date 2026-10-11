@@ -1,3 +1,4 @@
+import { guardOrigin } from "@/lib/api";
 import { NextResponse } from "next/server";
 import { enqueueCommand, getControl, logEvent, type ControlCommand } from "@talon/core";
 import { getDb } from "@/lib/db";
@@ -8,6 +9,7 @@ export const dynamic = "force-dynamic";
 const CMDS: readonly ControlCommand[] = ["start", "pause", "kill", "reset"];
 
 export async function POST(req: Request) {
+  const cors = guardOrigin(req); if (cors) return cors;
   let body: unknown;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: "body must be JSON {mode, cmd}" }, { status: 400 }); }
   const { mode, cmd } = (body ?? {}) as { mode?: unknown; cmd?: unknown };

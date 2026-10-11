@@ -1,4 +1,4 @@
-import { bad, fail, intParam, ok, readJson } from "@/lib/api";
+import { bad, fail, intParam, ok, readJson, guardOrigin } from "@/lib/api";
 import { getSupervisor } from "@/lib/supervisor";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ export function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const cors = guardOrigin(req); if (cors) return cors;
   const body = await readJson(req);
   if (!body) return bad("body must be a JSON object {action, mode?, token?}");
   const { action, mode, token } = body;

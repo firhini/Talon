@@ -5,6 +5,11 @@ import { readEnvExample, readEnvFile, secretStatus } from "./envfile";
 /** Keys the dashboard may write to the settings table: everything documented in .env.example except secrets/paths/live gate. */
 const NEVER_IN_SETTINGS = new Set<string>([...SECRET_KEYS, "LIVE_CONFIRM", "DB_PATH"]);
 export const EXTRA_SETTING_KEYS = ["STRATEGY_PRESET", "VOLUME_AVG_N", "MAX_SETUP_BARS", "MAX_CHASE_ATR", "TIME_STOP_BARS", "ATR_N", "ALLOW_LONG", "ALLOW_SHORT", "MIN_NOTIONAL_USD", "MAKER_FEE_BPS", "DEFAULT_HOURLY_FUNDING", "POLL_INTERVAL_MS", "REGIME_ER_N"];
+/** Own-property check: "constructor"/"__proto__" are not presets. */
+export function isPresetId(x: unknown): x is PresetId {
+  return typeof x === "string" && Object.hasOwn(PRESETS, x);
+}
+
 export function settableKeys(): Set<string> {
   const s = new Set<string>(EXTRA_SETTING_KEYS);
   for (const e of EDITABLE_SETTINGS) s.add(e.key);
@@ -26,7 +31,7 @@ export function validateSetting(key: string, raw: unknown): { ok: true; value: s
   if (type === "number") { if (!Number.isFinite(Number(value))) return { ok: false, error: `${key}: must be a number` }; }
   else if (type === "boolean") { if (!["true", "false"].includes(value.toLowerCase())) return { ok: false, error: `${key}: must be true or false` }; return { ok: true, value: value.toLowerCase() }; }
   else if (type === "select") { if (def?.options && !def.options.includes(value)) return { ok: false, error: `${key}: must be one of ${def.options.join("|")}` }; }
-  if (key === "STRATEGY_PRESET" && !(value in PRESETS)) return { ok: false, error: `STRATEGY_PRESET: unknown preset ${value}` };
+  if (key === "STRATEGY_PRESET" && !isPresetId(value)) return { ok: false, error: `STRATEGY_PRESET: unknown preset ${value}` };
   if (key === "HL_ACCOUNT_ADDRESS" && value !== "" && !/^0x[0-9a-fA-F]{40}$/.test(value)) return { ok: false, error: "HL_ACCOUNT_ADDRESS: must be 0x + 40 hex chars" };
   if (key === "UNIVERSE" && !/^[A-Za-z0-9,\s]+$/.test(value)) return { ok: false, error: "UNIVERSE: comma-separated coin symbols" };
   return { ok: true, value };
@@ -51,7 +56,7 @@ export interface EffectiveConfig {
 
 export function activePreset(db: DB): Preset | null {
   const id = allSettings(db).STRATEGY_PRESET;
-  return id && id in PRESETS ? PRESETS[id as PresetId] : null;
+  return isPresetId(id) ? PRESETS[id] : null;
 }
 
 /**
@@ -98,12 +103,21 @@ export function composeEnv(db: DB, opts: ComposeOptions): NodeJS.ProcessEnv {
   const env = readEnvFile();
   for (const [k, v] of Object.entries(env)) if (v !== "") out[k] = v;
   const settings = allSettings(db);
-  const presetId = opts.preset ?? (settings.STRATEGY_PRESET in PRESETS ? (settings.STRATEGY_PRESET as PresetId) : null);
-  if (presetId) Object.assign(out, PRESETS[presetId].env);
-  for (const [k, v] of Object.entries(settings)) if (!NEVER_IN_SETTINGS.has(k) && k !== "MODE") out[k] = v;
+  const explicit = isPresetId(opts.preset) ? opts.preset : null;
+  const active = isPresetId(settings.STRATEGY_PRESET) ? settings.STRATEGY_PRESET : null;
+  const presetId = explicit ?? active;
+  // implicit (active) preset: preset < settings (user overrides win)
+  // explicit preset (run backtest for preset X): settings < preset (the preset must win over the active preset's keys)
+  if (!explicit && presetId) Object.assign(out, PRESETS[presetId].env);
+  for (const [k, v] of Object.entries(settings)) if (!NEVER_IN_SETTINGS.has(k) && k !== "MODE" && k !== "STRATEGY_PRESET") out[k] = v;
+  if (explicit) Object.assign(out, PRESETS[explicit].env);
   if (opts.extra) for (const [k, v] of Object.entries(opts.extra)) if (!NEVER_IN_SETTINGS.has(k) && k !== "MODE" && k !== "DB_PATH") out[k] = v;
-  delete out.LIVE_CONFIRM;
-  delete out.HL_PRIVATE_KEY;
+  // the live equity cap must never throttle paper trading or backtests
+  if (opts.mode !== "live") out.MAX_ACCOUNT_EQUITY = "";
+  // explicitly empty (not deleted): the bot's own dotenv loader never overrides a variable that is already set,
+  // so a LIVE_CONFIRM/HL_PRIVATE_KEY left in the .env file cannot leak into a paper or job process
+  out.LIVE_CONFIRM = "";
+  out.HL_PRIVATE_KEY = "";
   out.MODE = opts.mode;
   out.DB_PATH = dbPath();
   out.STRATEGY_PRESET = presetId ?? "";

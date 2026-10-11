@@ -9,8 +9,8 @@ export function Panel({ title, right, children, className = "", bodyClass = "" }
   return (
     <section className={`panel flex min-w-0 flex-col ${className}`}>
       <header className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2">
-        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">{title}</h2>
-        {right && <div className="truncate text-[11px] text-zinc-500">{right}</div>}
+        <h2 className="shrink-0 text-[13px] font-semibold tracking-wide whitespace-nowrap text-zinc-200">{title}</h2>
+        {right && <div className="min-w-0 truncate text-[11px] text-zinc-500">{right}</div>}
       </header>
       <div className={`min-w-0 flex-1 ${bodyClass}`}>{children}</div>
     </section>
@@ -20,16 +20,14 @@ export function Panel({ title, right, children, className = "", bodyClass = "" }
 export function Tile({ label, value, sub, cls = "", spark, strip, meter, title }: { label: string; value: string; sub?: React.ReactNode; cls?: string; spark?: { points: Pt[]; baseline?: number; pnl?: boolean; color?: string }; strip?: { points: Pt[]; signed?: boolean }; meter?: { value: number; max: number; danger?: number }; title?: string }) {
   return (
     <div className="panel flex min-w-0 flex-col justify-between px-3.5 py-2.5" title={title}>
-      <div className="label truncate">{label}</div>
-      <div className="mt-1 flex items-end justify-between gap-2">
-        <div className="min-w-0">
-          <div className={`num truncate text-[1.35rem] leading-tight font-semibold ${cls}`}>{value}</div>
-          {sub && <div className="num mt-0.5 truncate text-[11px] text-zinc-500">{sub}</div>}
-        </div>
-        {spark && <div className="shrink-0"><Sparkline points={spark.points} baseline={spark.baseline} pnl={spark.pnl} color={spark.color} width={96} height={30} /></div>}
-        {strip && <div className="shrink-0"><BarStrip points={strip.points} signed={strip.signed} width={96} height={30} /></div>}
+      <div className="flex items-start justify-between gap-2">
+        <div className="label truncate pt-0.5">{label}</div>
+        {spark && <div className="shrink-0"><Sparkline points={spark.points} baseline={spark.baseline} pnl={spark.pnl} color={spark.color} width={84} height={24} /></div>}
+        {strip && <div className="shrink-0"><BarStrip points={strip.points} signed={strip.signed} width={84} height={24} /></div>}
       </div>
-      {meter && <div className="mt-2"><Meter value={meter.value} max={meter.max} danger={meter.danger} /></div>}
+      <div className={`num mt-0.5 truncate text-[1.3rem] leading-tight font-semibold ${cls}`}>{value}</div>
+      {sub && <div className="num mt-0.5 truncate text-[11px] text-zinc-500">{sub}</div>}
+      {meter && <div className="mt-1.5"><Meter value={meter.value} max={meter.max} danger={meter.danger} /></div>}
     </div>
   );
 }
@@ -47,12 +45,12 @@ export function StatTiles({ s }: { s: DashboardState }) {
       <Tile label="Realized total" value={fmtPnl(s.realizedTotal)} cls={pnlClass(s.realizedTotal)} sub={`${st.n} trades · gross ${fmtPnl(st.gross, 0)}`} spark={{ points: s.sparks.realized, baseline: 0, pnl: true }} />
       <Tile label="Open position" value={pos ? fmtPnl(pos.unrealized) : "flat"} cls={pos ? pnlClass(pos.unrealized) : "text-zinc-500"} sub={pos ? `${pos.coin} ${pos.side} ${fmtNum(pos.leverage, 0)}x · ROE ${fmtPct(pos.roe, 1)}` : "no open position"} />
       <Tile label="Win rate" value={st.n ? fmtPct(st.winRate, 1, false) : "—"} sub={`PF ${st.profitFactor === null ? "∞" : fmtRatio(st.profitFactor)} · exp ${fmtPnl(st.expectancy)} · ${fmtRatio(st.expectancyR, 2)}R`} spark={{ points: s.stats.rollingWinRate, color: "#3987e5", baseline: 0.5 }} />
-      <Tile label="Current streak" value={streakTxt} cls={st.streak.kind === "win" ? "text-emerald-400" : st.streak.kind === "loss" ? "text-rose-400" : ""} sub={`longest W ${st.longestWinStreak} · L ${st.longestLossStreak}`} strip={{ points: st.recent }} />
+      <Tile label="Streak" value={streakTxt} cls={st.streak.kind === "win" ? "text-emerald-400" : st.streak.kind === "loss" ? "text-rose-400" : ""} sub={`longest W ${st.longestWinStreak} · L ${st.longestLossStreak}`} strip={{ points: st.recent }} />
       <Tile label="Best / worst trade" value={st.best ? fmtPnl(st.best.pnl) : "—"} cls={st.best ? "text-emerald-400" : ""} sub={st.worst ? <>worst <span className="text-rose-400">{fmtPnl(st.worst.pnl)}</span> · {st.best?.coin} / {st.worst.coin}</> : "—"} />
       <Tile label="Fees paid" value={fmtUsd(st.fees)} sub={<>funding net <span className={pnlClass(st.funding)}>{fmtPnl(st.funding)}</span></>} spark={{ points: s.sparks.fees, color: "#d95926", baseline: 0 }} />
       <Tile label="Trades today" value={String(st.tradesToday)} sub={`today ${fmtPnl(st.pnlToday)} · 14-day strip`} strip={{ points: st.perDay, signed: false }} />
       <Tile label="Daily loss limit" value={info?.dailyLossLimitPct !== undefined ? `-${fmtPct(info.dailyLossLimitPct, 1, false)}` : "—"} sub={s.dayPnlPct !== null && s.dayPnlPct < 0 ? `used ${fmtPct(-s.dayPnlPct / (info?.dailyLossLimitPct ?? 0.05), 0, false)} of limit` : "nothing lost today"} meter={{ value: s.dayPnlPct !== null && s.dayPnlPct < 0 ? -s.dayPnlPct : 0, max: info?.dailyLossLimitPct ?? 0.05 }} />
-      <Tile label="Strategy" value={s.preset ? s.preset.name : info?.strategy ?? "—"} sub={<span className="flex items-center gap-2">{s.preset && <RiskMeter level={s.preset.riskLevel} size="sm" />}{info ? `${info.strategy} · ${info.interval} · ${fmtNum(info.leverage, 0)}x · ${fmtPct(info.sizeFraction, 0, false)}` : "no bot info"}</span>} />
+      <Tile label="Strategy" value={s.preset ? s.preset.name : info?.strategy ?? "—"} sub={<span className="flex items-center gap-2">{s.preset && <RiskMeter level={s.preset.riskLevel} size="sm" />}{info ? `${info.strategy} · ${info.interval} · ${fmtNum(info.leverage, 0)}x` : "no bot info"}</span>} />
     </div>
   );
 }

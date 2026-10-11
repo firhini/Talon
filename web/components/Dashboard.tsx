@@ -124,7 +124,7 @@ export default function Dashboard({ initial, ticker }: { initial: DashboardState
               <LineChart series={[{ name: "Equity", color: "#f0b429", points: equityPts }, { name: "Realized", color: "#8b8b95", dashed: true, points: realizedPts }]} yFormat="usd" baseline={startEq} emptyText="No equity history yet — start the bot" height={230} />
             </div>
             <div className="border-t border-zinc-800/70 px-2 pt-2 pb-1">
-              <LineChart series={[{ name: "Drawdown", color: "#fb7185", points: s.drawdown }]} yFormat="pct" baseline={0} fillFrom="baseline" emptyText="" height={110} />
+              <LineChart series={[{ name: "Drawdown", color: "#fb7185", points: s.drawdown }]} yFormat="pct" baseline={0} fillFrom="baseline" yMin={-0.05} yMax={0} emptyText="" height={110} />
             </div>
           </Panel>
           <div className="xl:col-span-2"><PositionCard p={s.position} now={s.now} mode={s.mode} /></div>

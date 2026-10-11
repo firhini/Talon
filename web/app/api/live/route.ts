@@ -1,5 +1,5 @@
 import { logEvent, setSettings } from "@talon/core";
-import { bad, fail, ok, readJson } from "@/lib/api";
+import { bad, fail, ok, readJson, guardOrigin } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { liveChecklist } from "@/lib/effective";
 import { getSupervisor } from "@/lib/supervisor";
@@ -20,6 +20,7 @@ export function GET() {
  * POST {action:"back-to-paper"}           → stops a live bot, sets MODE=paper and starts the paper bot
  */
 export async function POST(req: Request) {
+  const cors = guardOrigin(req); if (cors) return cors;
   const body = await readJson(req);
   if (!body) return bad("body must be {action, ...}");
   const { action } = body;
@@ -31,13 +32,15 @@ export async function POST(req: Request) {
       const check = liveChecklist(db);
       if (!check.ready) return bad(`not ready for live: ${check.problems.join("; ")}`, 409);
       const proc = sup.process();
-      if (proc.status === "running") return bad(`bot process is already running in ${proc.mode} mode — stop it first`, 409);
+      if (proc.status === "running" && proc.mode === "live") return bad("a live bot is already running", 409);
       const t = sup.mintToken();
       logEvent(db, "live", "warn", "dashboard: live start confirmed (token issued, valid 2 min)");
       return ok({ token: t.token, expiresAt: t.expiresAt, checklist: check });
     }
     if (action === "start") {
       if (typeof body.token !== "string" || !body.token) return bad("token required (confirm first)", 403);
+      const running = sup.process();
+      if (running.status === "running" && running.mode !== "live") { await sup.stop(); logEvent(db, "paper", "info", "dashboard: paper bot stopped to go live"); }
       const proc = await sup.start({ mode: "live", token: body.token });
       setSettings(db, { MODE: "live" });
       return ok({ process: proc });

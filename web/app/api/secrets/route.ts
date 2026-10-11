@@ -1,5 +1,5 @@
 import { logEvent, SECRET_KEYS } from "@talon/core";
-import { bad, fail, ok, readJson } from "@/lib/api";
+import { bad, fail, ok, readJson, guardOrigin } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { envFilePath, isPrivateKey, secretStatus, writeEnvKey } from "@/lib/envfile";
 import { getSupervisor } from "@/lib/supervisor";
@@ -13,6 +13,7 @@ export function GET() {
 
 /** POST {key: "HL_PRIVATE_KEY", value: "0x…" | null} — written only to the .env file. */
 export async function POST(req: Request) {
+  const cors = guardOrigin(req); if (cors) return cors;
   const body = await readJson(req);
   if (!body) return bad("body must be {key, value}");
   const { key, value } = body;

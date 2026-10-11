@@ -1,6 +1,7 @@
+import { isPresetId } from "./effective";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { allSettings, EDITABLE_SETTINGS, PRESET_LIST, PRESETS, REPO_ROOT, type PresetId } from "@talon/core";
+import { allSettings, EDITABLE_SETTINGS, loadBotState, PRESET_LIST, PRESETS, REPO_ROOT, type PresetId } from "@talon/core";
 import { asMetrics, summarize } from "./backtest";
 import { dataCoverage, dbPath, dbSizeBytes, getDb, latestBacktestByLabel, tableCounts } from "./db";
 import { effectiveConfig } from "./effective";
@@ -26,7 +27,7 @@ export const OVERRIDABLE_GROUPS = new Set(["Strategy", "Risk", "Market"]);
 export function presetsPayload() {
   const db = getDb();
   const settings = allSettings(db);
-  const active = settings.STRATEGY_PRESET in PRESETS ? (settings.STRATEGY_PRESET as PresetId) : null;
+  const active = isPresetId(settings.STRATEGY_PRESET) ? settings.STRATEGY_PRESET : null;
   const keys = EDITABLE_SETTINGS.filter((e) => OVERRIDABLE_GROUPS.has(e.group)).map((e) => e.key);
   const presets = PRESET_LIST.map((p) => {
     const bt = latestBacktestByLabel(db, p.backtestLabel);
@@ -52,6 +53,7 @@ export function systemPayload(lines = 200) {
   return {
     now: Date.now(),
     process: sup.process(),
+    bots: (["paper", "live"] as const).map((m) => { const b = loadBotState(db, m); return b ? { mode: m, status: b.status, lastTick: b.lastTick, equity: b.equity, halted: b.halted, runId: b.runId, startedAt: b.startedAt } : null; }).filter((b) => b !== null),
     log: sup.logTail(lines),
     jobs: sup.jobs(50),
     currentJob: sup.current(),

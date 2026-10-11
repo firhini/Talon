@@ -25,6 +25,7 @@ export function parseEnv(text: string): Record<string, string> {
     if (!m) continue;
     let v = m[2].trim();
     if ((v.startsWith('"') && v.endsWith('"') && v.length >= 2) || (v.startsWith("'") && v.endsWith("'") && v.length >= 2)) v = v.slice(1, -1);
+    else if (v.startsWith("#")) v = ""; // `KEY=   # comment` → empty
     else { const h = v.search(/\s#/); if (h >= 0) v = v.slice(0, h).trim(); }
     out[m[1]] = v;
   }
@@ -78,7 +79,7 @@ export function writeEnvKey(key: string, value: string | null, path = envFilePat
 export function secretStatus(path = envFilePath()): Record<string, boolean> {
   const env = readEnvFile(path);
   const out: Record<string, boolean> = {};
-  for (const k of SECRET_KEYS) out[k] = typeof env[k] === "string" && env[k].trim() !== "";
+  for (const k of SECRET_KEYS) out[k] = k === "HL_PRIVATE_KEY" ? isPrivateKey(env[k]) : typeof env[k] === "string" && env[k].trim() !== "";
   return out;
 }
 

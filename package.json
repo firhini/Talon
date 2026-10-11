@@ -10,6 +10,7 @@
     "web"
   ],
   "scripts": {
+    "start": "node scripts/launch.mjs",
     "build": "npm run build -w core && npm run build -w bot && npm run build -w web",
     "build:core": "npm run build -w core",
     "test": "npm run test -w core && npm run test -w bot",
